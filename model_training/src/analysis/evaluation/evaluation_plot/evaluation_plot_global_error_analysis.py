@@ -32,6 +32,59 @@ if TYPE_CHECKING:
     from matplotlib.axes import Axes
     from matplotlib.figure import Figure
 
+# =============================================================================
+# INTERNAL HELPERS
+# =============================================================================
+
+
+def _radial_frequency_spectrum(field: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Compute radially averaged 2D FFT power spectrum.
+
+    Parameters
+    ----------
+    field : np.ndarray
+        2D error field.
+
+    Returns
+    -------
+    k : np.ndarray
+        Radial frequency bins (normalized).
+    power : np.ndarray
+        Radially averaged power spectrum.
+
+    """
+    ny, nx = field.shape
+
+    fhat = np.fft.fft2(field)
+    power2d = np.abs(fhat) ** 2
+
+    ky = np.fft.fftfreq(ny)
+    kx = np.fft.fftfreq(nx)
+    KX, KY = np.meshgrid(kx, ky)
+    k_radius = np.sqrt(KX**2 + KY**2)
+
+    k_flat = k_radius.ravel()
+    p_flat = power2d.ravel()
+
+    nbins = min(ny, nx) // 2
+    bins = np.linspace(0.0, k_flat.max(), nbins + 1)
+    bin_idx = np.digitize(k_flat, bins) - 1
+
+    power = np.zeros(nbins)
+    counts = np.zeros(nbins)
+
+    for i in range(nbins):
+        mask = bin_idx == i
+        if np.any(mask):
+            power[i] = p_flat[mask].mean()
+            counts[i] = mask.sum()
+
+    valid = counts > 0
+    k = 0.5 * (bins[:-1] + bins[1:])
+
+    return k[valid], power[valid]
+
 
 # =============================================================================
 # 1-1. GLOBAL ERROR METRICS
@@ -401,7 +454,7 @@ def plot_error_distribution(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBo
 
 
 # =============================================================================
-# 1-3. GLOBAL GT VS PRED (incremental cached)
+# 1-3. GLOBAL GT VS PRED
 # =============================================================================
 
 
@@ -955,3 +1008,58 @@ def plot_std_error_maps(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:  
         start_cases=100,
         step_size=50,
     )
+
+
+# =============================================================================
+# 1-6. ERROR FREQUENCY SPECTRUM
+# =============================================================================
+
+
+def plot_global_error_frequency_spectrum(*, datasets: dict[str, pd.DataFrame]) -> Figure:
+    """
+    Global error frequency spectrum across datasets.
+
+    This plot analyses the spectral content of prediction errors to assess
+    whether increasing dataset variability introduces new dominant spatial
+    error modes or merely scales existing structures.
+
+    Interpretation:
+        - Parallel spectra indicate identical structural error with scaled magnitude
+        - Increased high-frequency energy indicates loss of fine-scale resolution
+    """
+    palette = sns.color_palette("tab10", len(datasets))
+
+    spectra: dict[str, list[np.ndarray]] = {name: [] for name in datasets}
+    freqs: dict[str, np.ndarray] = {}
+
+    for name, df in datasets.items():
+        df_i = df.reset_index(drop=True)
+
+        for path in df_i["npz_path"]:
+            data = np.load(path)
+            err = data["err"][0]
+
+            # combine all channels into a single error magnitude field
+            field = np.linalg.norm(err, axis=0)
+
+            k, p = _radial_frequency_spectrum(field)
+            spectra[name].append(p)
+            freqs[name] = k
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    for name, color in zip(datasets.keys(), palette, strict=False):
+        arr = np.vstack(spectra[name])
+        mean_spec = np.mean(arr, axis=0)
+
+        ax.plot(freqs[name], mean_spec, lw=2, label=name, color=color)
+
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("Spatial frequency")
+    ax.set_ylabel("Error power")
+    ax.set_title("Global error frequency spectrum")
+    ax.grid(True, which="both", linestyle="--", alpha=0.3)
+    ax.legend(title="Dataset")
+
+    return fig

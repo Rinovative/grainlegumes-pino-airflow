@@ -153,6 +153,79 @@ def _build_int_step_control(
     return control, prev_btn, next_btn
 
 
+def _build_checkbox_group(
+    *,
+    options: list[str],
+    defaults: list[str],
+    description: str | None = None,
+    n_cols: int = 2,
+) -> widgets.VBox:
+    """
+    Create internal generic checkbox group builder.
+
+    Parameters
+    ----------
+    options : list[str]
+        Available checkbox options.
+    defaults : list[str]
+        Options enabled by default.
+    description : str | None, optional
+        Optional group label shown above the checkboxes.
+    n_cols : int, optional
+        Number of columns for checkbox layout (default: 2).
+
+    Returns
+    -------
+    widgets.VBox
+        VBox containing the checkbox group.
+
+    Notes
+    -----
+    The returned VBox exposes a public `boxes` attribute
+    mapping option -> Checkbox widget.
+
+    """
+    boxes = {
+        opt: widgets.Checkbox(
+            value=opt in defaults,
+            description=opt,
+            indent=False,
+            layout=widgets.Layout(
+                margin="0px",
+                width="auto",
+            ),
+            style={"description_width": "auto"},
+        )
+        for opt in options
+    }
+
+    # -------------------------------------------------
+    # Layout: grid (e.g. p u / v U)
+    # -------------------------------------------------
+    grid = widgets.GridBox(
+        children=list(boxes.values()),
+        layout=widgets.Layout(
+            grid_template_columns=" ".join(["auto"] * n_cols),
+            grid_gap="0px 15px",
+        ),
+    )
+
+    children: list[widgets.Widget] = []
+    if description is not None:
+        children.append(widgets.Label(description))
+
+    children.append(grid)
+
+    box = widgets.VBox(
+        children,
+        layout=widgets.Layout(
+            margin="0px 0px 0px 25px",
+        ),
+    )
+    box.boxes = boxes
+    return box
+
+
 # =============================================================================
 # SEMANTIC NAVIGATION COMPONENTS
 # =============================================================================
@@ -297,6 +370,39 @@ def ui_dropdown_channel(
     )
 
 
+def ui_dropdown_input_parameter(
+    *,
+    parameters: list[str],
+    default: str | None = None,
+) -> widgets.Dropdown:
+    """
+    Dropdown selector for input parameters (par_*).
+
+    Parameters
+    ----------
+    parameters : list[str]
+        Available input parameters.
+    default : str | None, optional
+        Default selected parameter. If None, first entry is used.
+
+    Returns
+    -------
+    widgets.Dropdown
+        Configured input-parameter dropdown.
+
+    """
+    if not parameters:
+        msg = "No input parameters available for dropdown."
+        raise ValueError(msg)
+
+    return _build_dropdown(
+        options=parameters,
+        value=default or parameters[0],
+        description="Parameter:",
+        width="auto",
+    )
+
+
 # =============================================================================
 # SEMANTIC RADIO SELECTORS
 # =============================================================================
@@ -340,6 +446,81 @@ def ui_radio_kappa_scale() -> widgets.RadioButtons:
         value="log10(kappa)",
         width="100px",
         margin="0 0 0 12px",
+    )
+
+
+# =============================================================================
+# SEMANTIC CHECKBOX SELECTORS
+# =============================================================================
+
+
+def ui_checkbox_channels(
+    *,
+    channels: list[str] | None = None,
+    default_on: list[str] | None = None,
+) -> widgets.VBox:
+    """
+    Checkbox selector for output channels.
+
+    Parameters
+    ----------
+    channels : list[str] | None, optional
+        Available channels. Defaults to ["p", "u", "v", "U"].
+    default_on : list[str] | None, optional
+        Channels enabled by default. Defaults to all channels.
+
+    Returns
+    -------
+    widgets.VBox
+        Checkbox group for channel selection.
+
+    Notes
+    -----
+    The returned widget exposes an internal `_boxes` attribute
+    mapping channel name -> Checkbox. This is used by plot
+    functions to determine which channels are active.
+
+    """
+    channels = channels or ["p", "u", "v", "U"]
+    default_on = default_on or channels
+
+    return _build_checkbox_group(
+        options=channels,
+        defaults=default_on,
+    )
+
+
+def ui_checkbox_datasets(
+    *,
+    dataset_names: list[str],
+    default_on: list[str] | None = None,
+) -> widgets.VBox:
+    """
+    Checkbox selector for datasets.
+
+    Parameters
+    ----------
+    dataset_names : list[str]
+        Available dataset names.
+    default_on : list[str] | None, optional
+        Datasets enabled by default. Defaults to all datasets.
+
+    Returns
+    -------
+    widgets.VBox
+        Checkbox group for dataset selection.
+
+    Notes
+    -----
+    The returned widget exposes a public `boxes` attribute
+    mapping dataset name -> Checkbox widget.
+
+    """
+    default_on = default_on or dataset_names
+
+    return _build_checkbox_group(
+        options=dataset_names,
+        defaults=default_on,
     )
 
 

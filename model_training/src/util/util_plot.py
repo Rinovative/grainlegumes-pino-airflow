@@ -95,16 +95,24 @@ def _attach_widget_rerender(
 
     Any change of a widget's value triggers the provided render function.
 
-    Parameters
-    ----------
-    widgets_list : list of widgets.Widget
-        Widgets whose value changes should trigger re-rendering.
-    render_func : callable
-        Zero-argument render function.
-
+    Supports:
+        - Widgets with a `value` trait
+        - VBox checkbox groups exposing a `.boxes` dict
     """
     for w in widgets_list:
-        w.observe(lambda _: render_func(), names="value")
+        # ---------------------------------------------
+        # Case 1: standard ValueWidget (Dropdown, Radio)
+        # ---------------------------------------------
+        if hasattr(w, "observe") and hasattr(w, "value"):
+            w.observe(lambda _: render_func(), names="value")
+            continue
+
+        # ---------------------------------------------
+        # Case 2: checkbox group (VBox with .boxes)
+        # ---------------------------------------------
+        if hasattr(w, "boxes"):
+            for cb in w.boxes.values():  # type: ignore[attr-defined]
+                cb.observe(lambda _: render_func(), names="value")
 
 
 # =============================================================================
@@ -119,6 +127,7 @@ def make_interactive_case_viewer(
     start_idx: int = 0,
     enable_dataset_dropdown: bool = True,
     extra_widgets: list[widgets.Widget] | None = None,
+    n_cases_fn: Callable[[str, pd.DataFrame], int] | None = None,
     **plot_kwargs: Any,
 ) -> widgets.VBox:
     """
@@ -139,6 +148,11 @@ def make_interactive_case_viewer(
     extra_widgets : list[widgets.Widget] | None, optional
         Additional widgets to include in the header.
         These widgets trigger re-rendering on value change.
+    n_cases_fn : callable | None, optional
+        Function of the form:
+            n_cases_fn(dataset_name, df) -> int
+        to determine the number of cases in a dataset.
+        If None, defaults to len(df) (default: None).
     **plot_kwargs : Any
         Forwarded into the plot function.
 
@@ -160,8 +174,11 @@ def make_interactive_case_viewer(
     # Case index step control
     # ------------------------------------------------------------------
     df_active = datasets[active_dataset]
+
+    n_cases_active = n_cases_fn(active_dataset, df_active) if n_cases_fn is not None else len(df_active)
+
     case_index, prev_btn, next_btn = ui_step_case_index(
-        n_cases=len(df_active),
+        n_cases=n_cases_active,
         start_idx=start_idx,
     )
 
@@ -182,8 +199,10 @@ def make_interactive_case_viewer(
 
         df = datasets[name]
 
+        n_cases = n_cases_fn(name, df) if n_cases_fn is not None else len(df)
+
         case_idx = case_index.value - 1
-        case_idx = max(0, min(len(df) - 1, case_idx))
+        case_idx = max(0, min(n_cases - 1, case_idx))
 
         _render_figure(
             out=out,
@@ -213,8 +232,11 @@ def make_interactive_case_viewer(
 
         def _on_dataset_change(change: dict) -> None:
             df_new = datasets[change["new"]]
-            case_index.max = len(df_new)
-            case_index.value = min(case_index.value, len(df_new))
+
+            n_cases_new = n_cases_fn(change["new"], df_new) if n_cases_fn is not None else len(df_new)
+
+            case_index.max = n_cases_new
+            case_index.value = min(case_index.value, n_cases_new)
             _render()
 
         dataset_dropdown.observe(_on_dataset_change, names="value")
@@ -251,7 +273,7 @@ def make_casecount_viewer(
     plot_func: Callable[..., Any],
     *,
     datasets: dict[str, pd.DataFrame],
-    start_cases: int = 50,
+    start_cases: int = 100,
     step_size: int = 50,
     extra_widgets: list[widgets.Widget] | None = None,
     **plot_kwargs: Any,
@@ -331,7 +353,10 @@ def make_casecount_viewer(
             prev_btn,
             next_btn,
             *extra_widgets,
-        ]
+        ],
+        layout=widgets.Layout(
+            align_items="center",
+        ),
     )
 
     return widgets.VBox([header, out])
