@@ -38,7 +38,7 @@ import torch
 from tqdm import tqdm
 
 
-def merge_batch_cases(  # noqa: C901, PLR0915
+def merge_batch_cases(
     batch_name: str,
     keep_input_fields: list[str] | None = None,
     keep_output_fields: list[str] | None = None,

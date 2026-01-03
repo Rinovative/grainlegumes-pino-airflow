@@ -1,3 +1,3 @@
-from . import eda_plot_spectral_analysis  # noqa: D104
+from . import eda_plot_case_statistics, eda_plot_spectral_analysis  # noqa: D104
 
-__all__ = ["eda_plot_spectral_analysis"]
+__all__ = ["eda_plot_case_statistics", "eda_plot_spectral_analysis"]

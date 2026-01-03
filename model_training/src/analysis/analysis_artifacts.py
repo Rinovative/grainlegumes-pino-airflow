@@ -147,7 +147,7 @@ NUMPY_FLOAT_TYPES = (
 )
 
 
-def meta_to_jsonable(obj: Any) -> Any:  # noqa: PLR0911
+def meta_to_jsonable(obj: Any) -> Any:
     """
     Convert tensors, numpy values and nested structures into JSON-safe types.
 

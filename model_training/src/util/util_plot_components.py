@@ -7,7 +7,28 @@ used by higher-level navigator functions in util_plot.py.
 
 from __future__ import annotations
 
+from typing import Protocol
+
 import ipywidgets as widgets
+
+# =============================================================================
+# TYPE CONTRACTS
+# =============================================================================
+
+
+class CheckboxGroup(Protocol):
+    """
+    Protocol for a group of checkboxes contained in a VBox.
+
+    Attributes
+    ----------
+    boxes : dict[str, widgets.Checkbox]
+        Mapping from checkbox label to checkbox widget.
+
+    """
+
+    boxes: dict[str, widgets.Checkbox]
+
 
 # =============================================================================
 # GENERIC BUILDING BLOCKS (internal use only)
@@ -521,6 +542,33 @@ def ui_checkbox_datasets(
     return _build_checkbox_group(
         options=dataset_names,
         defaults=default_on,
+    )
+
+
+def ui_checkbox_log_scale(
+    *,
+    description: str = "log10 for scale parameters",
+    default: bool = False,
+) -> widgets.Checkbox:
+    """
+    Checkbox selector for enabling log10 scaling.
+
+    Parameters
+    ----------
+    description : str, optional
+        Checkbox label.
+    default : bool, optional
+        Default checkbox state.
+
+    Returns
+    -------
+    widgets.Checkbox
+        Configured log-scale checkbox.
+
+    """
+    return widgets.Checkbox(
+        value=default,
+        description=description,
     )
 
 

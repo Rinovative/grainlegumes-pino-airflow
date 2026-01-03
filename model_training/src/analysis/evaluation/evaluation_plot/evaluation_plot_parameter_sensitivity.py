@@ -112,7 +112,7 @@ def _rel_l2(err: np.ndarray, gt: np.ndarray) -> float:
 # =============================================================================
 
 
-def plot_parameter_error_heatmap(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:  # noqa: C901
+def plot_parameter_error_heatmap(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
     """
     Parameter-error correlation heatmap.
 
@@ -128,7 +128,7 @@ def plot_parameter_error_heatmap(*, datasets: dict[str, pd.DataFrame]) -> widget
 
     """
 
-    def _plot(  # noqa: C901, PLR0912
+    def _plot(
         *,
         datasets: dict[str, pd.DataFrame],
         max_cases: int,
@@ -249,7 +249,7 @@ def plot_parameter_error_heatmap(*, datasets: dict[str, pd.DataFrame]) -> widget
 # =============================================================================
 
 
-def plot_error_vs_parameter_trend(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:  # noqa: C901, PLR0915
+def plot_error_vs_parameter_trend(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
     """
     Parameter-error trend plots.
 
@@ -343,7 +343,7 @@ def plot_error_vs_parameter_trend(*, datasets: dict[str, pd.DataFrame]) -> widge
     # --------------------------------------------------
     # CASECOUNT plot
     # --------------------------------------------------
-    def _plot(  # noqa: C901
+    def _plot(
         max_cases: int,
         *,
         datasets: dict[str, pd.DataFrame],

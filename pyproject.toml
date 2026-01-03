@@ -28,14 +28,18 @@ extend-exclude = [
   "venv", ".venv", "data", "outputs", "results", "build", "dist"
 ]
 
-# --- Ruff Formatter (PEP 8 / PEP 257 aligned) ---
+# ------------------------------------------------------------
+# ✨ Ruff Formatter (PEP 8 / PEP 257 aligned)
+# ------------------------------------------------------------
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
 skip-magic-trailing-comma = false
 line-ending = "auto"
 
-# --- Ruff Linter ---
+# ------------------------------------------------------------
+# 🧹 Ruff Linter
+# ------------------------------------------------------------
 [tool.ruff.lint]
 select = ["ALL"]
 ignore = [
@@ -50,12 +54,27 @@ ignore = [
   "ANN401",  # Typing Any
   "FBT001", "FBT002", "FBT003",  # Boolean positional arguments
   "PLR0913",  # Too many function arguments
-  "N806", "N803",  # Variable naming conventions
+  "N806", "N803",  # Variable naming conventions (scientific code)
   "EXE002",  # Missing executable permissions
   "T201",    # Print statements
   "ERA001",  # commented-out code disallowed
 ]
 fixable = ["ALL"]
+
+# ------------------------------------------------------------
+# 🧠 Code complexity (McCabe)
+# ------------------------------------------------------------
+[tool.ruff.lint.mccabe]
+max-complexity = 20
+
+# ------------------------------------------------------------
+# 🧱 Structural limits (Pylint-style)
+# ------------------------------------------------------------
+[tool.ruff.lint.pylint]
+max-branches = 20
+max-statements = 100
+max-returns = 10
+
 
 # ============================================================
 # 🧮 Type Checking

@@ -5,19 +5,12 @@ This module focuses on *where* prediction errors occur by decomposing them
 with respect to:
     1) distance from the domain boundary
     2) output magnitude |GT|
-
-All functions are designed to be called through the notebook toggle shortcut
-and are compatible with the casecount viewer infrastructure.
-
-Injected by the notebook:
-    datasets : dict[str, pandas.DataFrame]
-        Mapping dataset_name → evaluation_df
 """
 
 from __future__ import annotations
 
 import itertools
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any
 
 import ipywidgets as widgets
 import matplotlib.pyplot as plt
@@ -30,19 +23,7 @@ if TYPE_CHECKING:
     import pandas as pd
     from matplotlib.figure import Figure
 
-
-class CheckboxGroup(Protocol):
-    """
-    Protocol for a group of checkboxes contained in a VBox.
-
-    Attributes
-    ----------
-    boxes : dict[str, widgets.Checkbox]
-        Mapping from checkbox label to checkbox widget.
-
-    """
-
-    boxes: dict[str, widgets.Checkbox]
+    from src.util.util_plot_components import CheckboxGroup
 
 
 # =============================================================================
@@ -50,7 +31,7 @@ class CheckboxGroup(Protocol):
 # =============================================================================
 
 
-def plot_error_vs_gt_magnitude(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:  # noqa: C901, PLR0915
+def plot_error_vs_gt_magnitude(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
     """
     Error decomposition with respect to output magnitude |GT|.
 
@@ -84,11 +65,11 @@ def plot_error_vs_gt_magnitude(*, datasets: dict[str, pd.DataFrame]) -> widgets.
     # ------------------------------------------------------------------
     # INTERNAL PLOT FUNCTION
     # ------------------------------------------------------------------
-    def _plot(  # noqa: C901, PLR0915
+    def _plot(
         max_cases: int,
         *,
         datasets: dict[str, pd.DataFrame],
-        dataset_selector: widgets.VBox,
+        dataset_selector: CheckboxGroup,
     ) -> Figure:
         """
         Plot error vs |GT| magnitude.
@@ -99,7 +80,7 @@ def plot_error_vs_gt_magnitude(*, datasets: dict[str, pd.DataFrame]) -> widgets.
             Number of cases to include from each dataset.
         datasets : dict[str, pandas.DataFrame]
             Mapping dataset_name → evaluation DataFrame.
-        dataset_selector : widgets.VBox
+        dataset_selector : CheckboxGroup
             Dataset selection checkbox widget.
 
         Returns
@@ -140,8 +121,7 @@ def plot_error_vs_gt_magnitude(*, datasets: dict[str, pd.DataFrame]) -> widgets.
         # --------------------------------------------------------------
         # Active datasets
         # --------------------------------------------------------------
-        group = cast("CheckboxGroup", dataset_selector)
-        active = [n for n, cb in group.boxes.items() if cb.value]
+        active = [n for n, cb in dataset_selector.boxes.items() if cb.value]
 
         if not active:
             msg = "Select at least one dataset."
@@ -270,7 +250,7 @@ def plot_error_vs_gt_magnitude(*, datasets: dict[str, pd.DataFrame]) -> widgets.
 # =============================================================================
 
 
-def plot_error_vs_boundary_distance(  # noqa: C901, PLR0915
+def plot_error_vs_boundary_distance(
     *,
     datasets: dict[str, pd.DataFrame],
 ) -> widgets.VBox:
@@ -319,11 +299,11 @@ def plot_error_vs_boundary_distance(  # noqa: C901, PLR0915
     # ------------------------------------------------------------------
     # INTERNAL PLOT FUNCTION (CASECOUNT)
     # ------------------------------------------------------------------
-    def _plot(  # noqa: C901, PLR0915
+    def _plot(
         *,
         datasets: dict[str, pd.DataFrame],
         max_cases: int,
-        channel_selector: widgets.VBox,
+        channel_selector: CheckboxGroup,
     ) -> Figure:
         """
         Plot boundary error vs distance from boundary.
@@ -334,7 +314,7 @@ def plot_error_vs_boundary_distance(  # noqa: C901, PLR0915
             Mapping dataset_name → evaluation DataFrame.
         max_cases : int
             Number of cases to include from each dataset.
-        channel_selector : widgets.VBox
+        channel_selector : CheckboxGroup
             Channel selection checkbox widget.
 
         Returns
@@ -346,9 +326,7 @@ def plot_error_vs_boundary_distance(  # noqa: C901, PLR0915
         # --------------------------------------------------------------
         # Active channels from checkbox widget
         # --------------------------------------------------------------
-        channel_group = cast("CheckboxGroup", channel_selector)
-
-        active_channels = [name for name, cb in channel_group.boxes.items() if cb.value]
+        active_channels = [name for name, cb in channel_selector.boxes.items() if cb.value]
 
         if not active_channels:
             msg = "At least one channel must be selected."

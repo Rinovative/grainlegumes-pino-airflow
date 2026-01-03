@@ -91,7 +91,7 @@ def _radial_frequency_spectrum(field: np.ndarray) -> tuple[np.ndarray, np.ndarra
 # =============================================================================
 
 
-def plot_global_error_metrics(*, datasets: dict[str, pd.DataFrame]) -> Figure:  # noqa: PLR0915
+def plot_global_error_metrics(*, datasets: dict[str, pd.DataFrame]) -> Figure:
     """
     Comprehensive global error comparison using three complementary views.
 
@@ -250,7 +250,7 @@ class CacheEntry(TypedDict):
     local_rel: list[np.ndarray]
 
 
-def plot_error_distribution(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:  # noqa: C901, PLR0915
+def plot_error_distribution(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
     """
     Interactive global error distribution analysis across datasets.
 
@@ -291,7 +291,7 @@ def plot_error_distribution(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBo
     # -------------------------------------------------------------------------
     # INTERNAL PLOT FUNCTION
     # -------------------------------------------------------------------------
-    def _plot(max_cases: int, *, datasets: dict[str, pd.DataFrame]) -> Figure:  # noqa: C901, PLR0912, PLR0915
+    def _plot(max_cases: int, *, datasets: dict[str, pd.DataFrame]) -> Figure:
         """
         Plot global and local error distributions for the first `max_cases` samples.
 
@@ -439,6 +439,9 @@ def plot_error_distribution(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBo
         ax_local_rel.set_yscale("log")
         ax_local_rel.set_title(f"Local Relative L2 Quantiles (first {max_cases} cases)")
         ax_local_rel.grid(True, axis="y", linestyle="--", alpha=0.3)
+        ax_local_rel.set_xticks(xpos)
+        ax_local_rel.set_xticklabels(qstats)
+        ax_local_rel.set_xlabel("Local relative L2 quantile")
 
         handles = [Line2D([0], [0], color=c, lw=6) for c in palette]
         ax_legend.legend(handles, names, title="Dataset", loc="upper center")
@@ -478,7 +481,7 @@ class GTCacheEntry(TypedDict):
     pred_means: dict[str, list[float]]
 
 
-def plot_global_gt_vs_pred(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:  # noqa: C901, PLR0915
+def plot_global_gt_vs_pred(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
     """
     Interactive global GT vs Prediction mean comparison across datasets.
 
@@ -514,7 +517,7 @@ def plot_global_gt_vs_pred(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox
     # =========================================================================
     # INTERNAL PLOT FUNCTION
     # =========================================================================
-    def _plot(max_cases: int, *, datasets: dict[str, pd.DataFrame]) -> Figure:  # noqa: C901
+    def _plot(max_cases: int, *, datasets: dict[str, pd.DataFrame]) -> Figure:
         # ---------------------------------------------------------------------
         # Incremental NPZ loading
         # ---------------------------------------------------------------------
@@ -637,7 +640,7 @@ def plot_global_gt_vs_pred(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox
 # =============================================================================
 
 
-def plot_mean_error_maps(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:  # noqa: C901, PLR0915
+def plot_mean_error_maps(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
     """
     Interactive mean error maps across datasets.
 
@@ -688,7 +691,7 @@ def plot_mean_error_maps(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox: 
     # -------------------------------------------------------
     # INTERNAL PLOT FUNCTION
     # -------------------------------------------------------
-    def _plot(  # noqa: C901, PLR0912, PLR0915
+    def _plot(
         *,
         datasets: dict[str, pd.DataFrame],
         max_cases: int,
@@ -856,7 +859,7 @@ def plot_mean_error_maps(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox: 
 # =============================================================================
 
 
-def plot_std_error_maps(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:  # noqa: C901, PLR0915
+def plot_std_error_maps(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
     """
     Interactive standard deviation error maps across datasets.
 
@@ -894,7 +897,7 @@ def plot_std_error_maps(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:  
     # -------------------------------------------------------
     # INTERNAL PLOT FUNCTION
     # -------------------------------------------------------
-    def _plot(  # noqa: C901, PLR0912, PLR0915
+    def _plot(
         *,
         datasets: dict[str, pd.DataFrame],
         max_cases: int,

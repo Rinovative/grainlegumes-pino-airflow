@@ -146,7 +146,7 @@ def build_wandb_config(
 # ================================================================
 # 🚀 Main Training Pipeline
 # ================================================================
-def train_base(  # noqa: PLR0915
+def train_base(
     CONFIG: dict[str, Any],
     model: Any,
     optimizer: Any,

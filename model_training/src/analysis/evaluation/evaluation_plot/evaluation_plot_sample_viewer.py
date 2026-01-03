@@ -335,7 +335,7 @@ def _overlay_streamlines(
 # =============================================================================
 
 
-def plot_sample_prediction_overview(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:  # noqa: PLR0915
+def plot_sample_prediction_overview(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
     """
     Build an interactive 4x4 evaluation viewer for PINO/FNO predictions and permeability fields.
 
@@ -367,7 +367,7 @@ def plot_sample_prediction_overview(*, datasets: dict[str, pd.DataFrame]) -> wid
     # -------------------------------------------------------------
     error_selector = util.util_plot_components.ui_radio_error_mode()
 
-    def _plot(  # noqa: PLR0915
+    def _plot(
         idx: int,
         *,
         df: pd.DataFrame,
@@ -524,7 +524,7 @@ def plot_sample_prediction_overview(*, datasets: dict[str, pd.DataFrame]) -> wid
 # =============================================================================
 
 
-def plot_sample_kappa_tensor_with_overlay(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:  # noqa: C901, PLR0915
+def plot_sample_kappa_tensor_with_overlay(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
     """
     Build an interactive evaluation viewer for permeability tensor components with error contour overlays.
 
@@ -591,7 +591,7 @@ def plot_sample_kappa_tensor_with_overlay(*, datasets: dict[str, pd.DataFrame]) 
     # ------------------------------------------------------------------
     # Plot
     # ------------------------------------------------------------------
-    def _plot(  # noqa: PLR0915
+    def _plot(
         idx: int,
         *,
         df: pd.DataFrame,

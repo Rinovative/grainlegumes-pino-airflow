@@ -453,7 +453,7 @@ def _overlay_streamlines(ax: Axes, X: np.ndarray, Y: np.ndarray, u: np.ndarray, 
 # =============================================================================
 
 
-def _plot_prediction_overview_case(  # noqa: PLR0915
+def _plot_prediction_overview_case(
     *,
     row: pd.Series,
     dataset_name: str,
