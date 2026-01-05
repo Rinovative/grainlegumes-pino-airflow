@@ -1,6 +1,5 @@
 """
 ===============================================================================
-
  build_batch_dataset.
 ===============================================================================
 Author:  Rino M. Albertin
@@ -13,17 +12,18 @@ Reads raw COMSOL simulation outputs and converts them into structured PyTorch
 `.pt` case files for PINO/FNO training and evaluation.
 
 Each case file contains:
-    - input_fields:   x, y, kappa* tensors (kappa already log10-transformed)
+    - input_fields:   x, y, kappa* tensors (log10), phi, p_bc
     - output_fields:  p, u, v, U
     - meta:           simulation metadata
 
-Directory structure created:
-
-    data/raw/<batch_name>/
-        ├── cases/       (case_XXXX.pt)
-        └── meta.pt      (optional batch metadata)
+Note:
+----
+p_bc is a boundary condition exported by COMSOL as a volume field.
+Values are zero everywhere except on the prescribed boundary.
+This encoding is intentional to keep a purely field-based PINO input.
 ===============================================================================
-"""  # noqa: INP001
+
+"""  # noqa: D205, INP001
 
 import json
 from pathlib import Path
@@ -34,26 +34,106 @@ import pandas as pd
 import torch
 from tqdm import tqdm
 
+# ============================================================================
+# Field definitions (single source of truth)
+# ============================================================================
 
-def build_batch_dataset(batch_name: str, verbose: bool = False) -> dict:  # noqa: C901, PLR0912, PLR0915
+# coordinate fields
+COORD_FIELDS = ("x", "y")
+
+# permeability tensor prefix
+KAPPA_PREFIX = "br.kappa"
+
+# scalar input fields exported as volume fields
+INPUT_SCALAR_FIELDS = {
+    "int4(x,y)": "phi",
+    "int5(x,y)": "p_bc",
+}
+
+# output fields
+OUTPUT_FIELDS = {
+    "p": "p",
+    "u": "u",
+    "v": "v",
+    "br.U": "U",
+}
+
+
+def _prune_meta(meta: dict[str, Any]) -> dict[str, Any]:
     """
-    Convert one COMSOL batch into structured `.pt` case files.
+    Prune unnecessary information from the meta dictionary.
+
+    Parameters
+    ----------
+    meta : dict[str, Any]
+        Original metadata dictionary.
+
+    Returns
+    -------
+    dict[str, Any]
+        Pruned metadata dictionary.
+
+    """
+    gen = meta.get("generator")
+    if not isinstance(gen, dict):
+        return meta
+
+    def _clean_block(block: dict[str, Any]) -> dict[str, Any]:
+        """
+        Recursively clean a block of the meta dictionary.
+
+        Parameters
+        ----------
+        block : dict[str, Any]
+            Block to clean.
+
+        Returns
+        -------
+            dict[str, Any]
+                Cleaned block.
+
+        """
+        out: dict[str, Any] = {}
+        for k, v in block.items():
+            # drop RNG / state / reproducibility info
+            if "state" in k.lower():
+                continue
+
+            if isinstance(v, dict):
+                cleaned = _clean_block(v)
+                if cleaned:
+                    out[k] = cleaned
+            # keep ONLY numeric values
+            elif isinstance(v, (int, float, np.integer, np.floating)):
+                out[k] = v
+        return out
+
+    meta["generator"] = _clean_block(gen)
+    return meta
+
+
+def build_batch_dataset(batch_name: str, verbose: bool = False) -> dict:  # noqa: C901, PLR0915
+    """
+    Build a batch dataset from raw COMSOL outputs.
 
     Parameters
     ----------
     batch_name : str
-        Name of the simulation batch.
-    verbose : bool
-        If True, print additional information.
+        Name of the batch to process (corresponds to folder names).
+    verbose : bool, optional
+        If True, prints additional information, by default False.
 
     Returns
     -------
     dict
-        Summary information for logging.
+        Summary of the dataset building process.
 
     """
-    log = []
+    log: list[str] = []
 
+    # ------------------------------------------------------------------
+    # Paths
+    # ------------------------------------------------------------------
     proj_root = Path(__file__).resolve().parents[2]
     gen_data_dir = proj_root / "data_generation" / "data"
 
@@ -68,6 +148,9 @@ def build_batch_dataset(batch_name: str, verbose: bool = False) -> dict:  # noqa
 
     log.append(f"Processing batch: {batch_name}")
 
+    # ------------------------------------------------------------------
+    # Case discovery
+    # ------------------------------------------------------------------
     json_files = sorted(raw_dir.glob("case_*.json"))
     csv_files = sorted(proc_dir.glob("case_*_sol.csv"))
 
@@ -81,84 +164,199 @@ def build_batch_dataset(batch_name: str, verbose: bool = False) -> dict:  # noqa
 
     log.append(f"Found {len(common)} matching cases.")
 
+    # ------------------------------------------------------------------
+    # IO helpers
+    # ------------------------------------------------------------------
     def load_case(csv_path: Path, meta_path: Path) -> tuple[pd.DataFrame, dict[str, Any]]:
-        with meta_path.open() as f:
-            meta_full = json.load(f)
+        """
+        Load a single case from CSV and JSON files.
 
-        meta = {k: v for k, v in meta_full.items() if k != "parameters"}
-        if "parameters" in meta_full:
-            meta["parameters"] = {k: v for k, v in meta_full["parameters"].items() if k != "rng_state"}
+        Parameters
+        ----------
+        csv_path : Path
+            Path to the CSV file.
+        meta_path : Path
+            Path to the JSON metadata file.
+
+        Returns
+        -------
+        tuple[pd.DataFrame, dict[str, Any]]
+            DataFrame with case data and metadata dictionary.
+
+        """
+        with meta_path.open() as f:
+            meta = json.load(f)
+
+        meta = _prune_meta(meta)
 
         with csv_path.open() as f:
             lines = f.readlines()
 
         header_line = [line for line in lines if line.strip().startswith("%")][-1]
-        raw_header = [h.strip() for h in header_line[1:].split(",")]
+        sep = ";"
+        header = header_line[1:].split(";")
 
-        if raw_header.count("y") > 1:
-            idx = [i for i, h in enumerate(raw_header) if h == "y"][1]
-            raw_header[idx] = "y_on"
+        header = [h.strip() for h in header]
+
+        if header.count("y") > 1:
+            idx = [i for i, h in enumerate(header) if h == "y"][1]
+            header[idx] = "y (on)"
 
         df = pd.read_csv(
             csv_path,
             comment="%",
-            skip_blank_lines=True,
-            names=raw_header,
+            sep=sep,
+            names=header,
             index_col=False,
+            skip_blank_lines=True,
         )
 
         return df, meta
 
-    first = common[0]
-    df_first, meta_first = load_case(proc_dir / f"{first}_sol.csv", raw_dir / f"{first}.json")
-    nx, ny = meta_first["geometry"]["nx"], meta_first["geometry"]["ny"]
+    def build_fields(
+        df: pd.DataFrame,
+        nx: int,
+        ny: int,
+        dropped_input: list[str],
+        dropped_output: list[str],
+    ) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
+        """
+        Build input and output fields from a case DataFrame.
 
-    dropped_input = []
-    dropped_output = []
+        Parameters
+        ----------
+        df : pd.DataFrame
+            DataFrame containing case data.
+        nx : int
+            Number of grid points in x direction.
+        ny : int
+            Number of grid points in y direction.
+        dropped_input : list[str]
+            List of input fields to drop.
+        dropped_output : list[str]
+            List of output fields to drop.
 
-    for c in [c for c in df_first.columns if c.startswith("br.kappa")]:
-        arr = df_first[c].to_numpy().reshape(ny, nx)
-        if not np.any(arr):
-            dropped_input.append(c.replace("br.", ""))
+        Returns
+        -------
+        tuple[dict[str, np.ndarray], dict[str, np.ndarray]]
+            Dictionaries of input and output fields.
 
-    for key in ["p", "u", "v", "br.U"]:
-        if key in df_first.columns:
-            arr = df_first[key].to_numpy().reshape(ny, nx)
-            if not np.any(arr):
-                dropped_output.append(key.replace("br.", ""))
+        """
+        input_fields: dict[str, np.ndarray] = {}
+        output_fields: dict[str, np.ndarray] = {}
 
-    input_fields_preview = {}
-    output_fields_preview = {}
+        # --------------------------------------------------------------
+        # Coordinates
+        # --------------------------------------------------------------
+        for c in COORD_FIELDS:
+            if c in df.columns:
+                input_fields[c] = df[c].to_numpy().reshape(ny, nx)
 
-    if "x" in df_first.columns and "y" in df_first.columns:
-        input_fields_preview["x"] = df_first["x"].to_numpy().reshape(ny, nx)
-        input_fields_preview["y"] = df_first["y"].to_numpy().reshape(ny, nx)
+        # --------------------------------------------------------------
+        # Permeability tensor
+        #   - diagonal components (xx, yy, zz): log10
+        #   - off-diagonal components (xy, yx, ...): relative scaling
+        # --------------------------------------------------------------
+        eps = 1e-12
 
-    eps = 1e-12
-    for col in [c for c in df_first.columns if c.startswith("br.kappa")]:
-        clean = col.replace("br.", "")
-        if clean in dropped_input:
-            continue
-        raw = df_first[col].to_numpy().reshape(ny, nx)
-        input_fields_preview[clean] = np.log10(raw + eps)
+        # cache diagonals for normalization
+        diag = {}
+        for col in (c for c in df.columns if c.startswith(KAPPA_PREFIX)):
+            name = col.replace("br.", "")
+            ij = name[-2:]
+            if ij[0] == ij[1]:
+                diag[ij[0]] = df[col].to_numpy().reshape(ny, nx)
 
-    for key in ["p", "u", "v", "br.U"]:
-        clean = key.replace("br.", "")
-        if key in df_first.columns and clean not in dropped_output:
-            output_fields_preview[clean] = df_first[key].to_numpy().reshape(ny, nx)
+        for col in (c for c in df.columns if c.startswith(KAPPA_PREFIX)):
+            name = col.replace("br.", "")
+            if name in dropped_input:
+                continue
+
+            raw = df[col].to_numpy().reshape(ny, nx)
+            ij = name[-2:]
+
+            if ij[0] == ij[1]:
+                # diagonal
+                input_fields[name] = np.log10(raw + eps)
+            else:
+                # off-diagonal: relative scaling
+                kii = diag.get(ij[0])
+                kjj = diag.get(ij[1])
+                if kii is None or kjj is None:
+                    # fallback (should not happen if tensor is complete)
+                    input_fields[name] = raw
+                else:
+                    input_fields[name] = raw / np.sqrt(kii * kjj + eps)
+
+        # --------------------------------------------------------------
+        # Scalar input fields (phi, p_bc)
+        # --------------------------------------------------------------
+        for csv_name, field_name in INPUT_SCALAR_FIELDS.items():
+            if csv_name in df.columns:
+                input_fields[field_name] = df[csv_name].to_numpy().reshape(ny, nx)
+
+        # --------------------------------------------------------------
+        # Outputs
+        # --------------------------------------------------------------
+        for csv_name, field_name in OUTPUT_FIELDS.items():
+            if csv_name in df.columns and field_name not in dropped_output:
+                output_fields[field_name] = df[csv_name].to_numpy().reshape(ny, nx)
+
+        return input_fields, output_fields
+
+    # ------------------------------------------------------------------
+    # Drop detection (reference case)
+    # ------------------------------------------------------------------
+    df_first, meta_first = load_case(
+        proc_dir / f"{common[0]}_sol.csv",
+        raw_dir / f"{common[0]}.json",
+    )
+
+    nx = meta_first["geometry"]["nx"]
+    ny = meta_first["geometry"]["ny"]
+
+    if verbose:
+        print("\n[DEBUG] df_first.columns:")
+        for col in df_first.columns:
+            print(f"  - {col}")
+
+    dropped_input: list[str] = []
+    dropped_output: list[str] = []
+
+    dropped_input = [
+        col.replace("br.", "") for col in df_first.columns if col.startswith(KAPPA_PREFIX) and not np.any(df_first[col].to_numpy().reshape(ny, nx))
+    ]
+
+    for csv_name, field_name in OUTPUT_FIELDS.items():
+        if csv_name in df_first.columns and not np.any(df_first[csv_name].to_numpy().reshape(ny, nx)):
+            dropped_output.append(field_name)
+
+    # ------------------------------------------------------------------
+    # Preview
+    # ------------------------------------------------------------------
+    preview_in, preview_out = build_fields(
+        df_first,
+        nx,
+        ny,
+        dropped_input,
+        dropped_output,
+    )
 
     if verbose:
         print("\nExample structure for first case:")
         print("--------------------------------------------------")
         print("input_fields:")
-        for k, v in input_fields_preview.items():
+        for k, v in preview_in.items():
             print(f"  {k:10s}  shape={v.shape}, dtype={v.dtype}")
         print("output_fields:")
-        for k, v in output_fields_preview.items():
+        for k, v in preview_out.items():
             print(f"  {k:10s}  shape={v.shape}, dtype={v.dtype}")
         print("meta keys:", list(meta_first.keys()))
         print("--------------------------------------------------\n")
 
+    # ------------------------------------------------------------------
+    # Main loop
+    # ------------------------------------------------------------------
     pbar = tqdm(
         total=len(common),
         desc=f"Building {batch_name}",
@@ -167,52 +365,48 @@ def build_batch_dataset(batch_name: str, verbose: bool = False) -> dict:  # noqa
     )
 
     for name in common:
-        csv_path = proc_dir / f"{name}_sol.csv"
-        meta_path = raw_dir / f"{name}.json"
+        df, meta = load_case(
+            proc_dir / f"{name}_sol.csv",
+            raw_dir / f"{name}.json",
+        )
 
-        df, meta = load_case(csv_path, meta_path)
-        nx, ny = meta["geometry"]["nx"], meta["geometry"]["ny"]
+        nx = meta["geometry"]["nx"]
+        ny = meta["geometry"]["ny"]
 
-        input_fields: dict[str, np.ndarray] = {}
-        output_fields: dict[str, np.ndarray] = {}
+        input_fields, output_fields = build_fields(
+            df,
+            nx,
+            ny,
+            dropped_input,
+            dropped_output,
+        )
 
-        if "x" in df.columns and "y" in df.columns:
-            input_fields["x"] = df["x"].to_numpy().reshape(ny, nx)
-            input_fields["y"] = df["y"].to_numpy().reshape(ny, nx)
+        torch.save(
+            {
+                "input_fields": input_fields,
+                "output_fields": output_fields,
+                "meta": meta,
+            },
+            cases_dir / f"{name}.pt",
+        )
 
-        eps = 1e-12
-        for col in [c for c in df.columns if c.startswith("br.kappa")]:
-            clean = col.replace("br.", "")
-            if clean in dropped_input:
-                continue
-            raw = df[col].to_numpy().reshape(ny, nx)
-            input_fields[clean] = np.log10(raw + eps)
-
-        for key in ["p", "u", "v", "br.U"]:
-            clean = key.replace("br.", "")
-            if key in df.columns and clean not in dropped_output:
-                output_fields[clean] = df[key].to_numpy().reshape(ny, nx)
-
-        data_case = {
-            "input_fields": input_fields,
-            "output_fields": output_fields,
-            "meta": meta,
-        }
-
-        torch.save(data_case, cases_dir / f"{name}.pt")
         pbar.update(1)
 
     pbar.close()
 
-    meta_json_path = meta_dir / f"{batch_name}.json"
-    meta_csv_path = meta_dir / f"{batch_name}.csv"
+    # ------------------------------------------------------------------
+    # Batch meta
+    # ------------------------------------------------------------------
     meta_saved = False
+    meta_json = meta_dir / f"{batch_name}.json"
+    meta_csv = meta_dir / f"{batch_name}.csv"
 
-    if meta_json_path.exists() and meta_csv_path.exists():
-        with meta_json_path.open() as f:
-            meta_json = json.load(f)
-        meta_csv = pd.read_csv(meta_csv_path)
-        meta_struct = {"json": meta_json, "csv": meta_csv.to_dict(orient="list")}
+    if meta_json.exists() and meta_csv.exists():
+        with meta_json.open() as f:
+            meta_struct = {
+                "json": json.load(f),
+                "csv": pd.read_csv(meta_csv).to_dict(orient="list"),
+            }
         torch.save(meta_struct, out_batch / "meta.pt")
         meta_saved = True
         log.append("Saved meta.pt")
@@ -230,6 +424,6 @@ def build_batch_dataset(batch_name: str, verbose: bool = False) -> dict:  # noqa
 
 
 if __name__ == "__main__":
-    result = build_batch_dataset("lhs_var80_plog100_seed3001", verbose=True)
+    result = build_batch_dataset("lhs_var80_seed3001", verbose=True)
     for line in result["log"]:
         print(line)

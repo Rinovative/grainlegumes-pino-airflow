@@ -1,6 +1,5 @@
 """
 ===============================================================================
-
  merge_batch_cases.
 ===============================================================================
 Author:  Rino M. Albertin
@@ -25,10 +24,8 @@ This script:
            outputs: (N, C_out, ny, nx)
     4. Saves a single <batch_name>.pt dataset for model_training.
     5. Copies meta.pt into the dataset folder if available.
-
-No additional transformations (such as log10) are applied here.
 ===============================================================================
-"""  # noqa: INP001
+"""  # noqa: D205, INP001
 
 import shutil
 from pathlib import Path
@@ -66,21 +63,9 @@ def merge_batch_cases(
 
     """
     if keep_input_fields is None:
-        keep_input_fields = [
-            "x",
-            "y",
-            "kappaxx",
-            "kappayx",
-            "kappazx",
-            "kappaxy",
-            "kappayy",
-            "kappazy",
-            "kappaxz",
-            "kappayz",
-            "kappazz",
-        ]
+        keep_input_fields = ["x", "y", "kappaxx", "kappayy", "kappaxy", "phi", "p_bc"]
     if keep_output_fields is None:
-        keep_output_fields = ["p", "u", "v", "U"]
+        keep_output_fields = ["p", "u", "v"]
 
     log = []
 
@@ -210,6 +195,6 @@ def merge_batch_cases(
 
 
 if __name__ == "__main__":
-    result = merge_batch_cases("lhs_var80_plog100_seed3001", verbose=True)
+    result = merge_batch_cases("lhs_var80_seed3001", verbose=True)
     for line in result["log"]:
         print(line)
