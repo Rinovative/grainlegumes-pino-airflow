@@ -27,11 +27,15 @@ def _to_numpy(value: Any) -> NDArray[np.float64] | None:
     """
     Convert arbitrary values (PyTorch tensors, lists, tuples) into NumPy arrays.
 
-    Args:
-        value: Object to convert (tensor, list, tuple, array, etc.).
+    Parameters
+    ----------
+    value : Any
+        Input value to convert.
 
-    Returns:
-        np.ndarray | None: Converted array, or None if conversion fails.
+    Returns
+    -------
+    NDArray[np.float64] or None
+        Converted NumPy array, or None if conversion is not possible.
 
     """
     if value is None:
@@ -57,11 +61,15 @@ def _iter_cases_sorted(cases_dir: Path) -> list[tuple[int, Path]]:
     """
     Collect all `case_XXXX.pt` files in numeric order.
 
-    Args:
-        cases_dir (Path): Path to the directory containing case files.
+    Parameters
+    ----------
+    cases_dir : Path
+        Directory containing case files.
 
-    Returns:
-        list[tuple[int, Path]]: List of (case_index, file_path) pairs sorted by index.
+    Returns
+    -------
+    list[tuple[int, Path]]
+        List of (case_index, file_path) tuples sorted by case_index.
 
     """
     candidates = sorted(cases_dir.glob("case_*.pt"))
@@ -76,45 +84,54 @@ def _iter_cases_sorted(cases_dir: Path) -> list[tuple[int, Path]]:
 
 def _extract_fields(sample: Mapping[str, Any]) -> tuple[dict[str, Any], list[str]]:
     """
-    Extract relevant data fields from a loaded `.pt` dictionary.
+    Extract all input_fields and output_fields from a case sample.
 
-    Converts tensors to NumPy arrays and flattens the nested structure
-    into a single row dictionary for DataFrame assembly.
+    Parameters
+    ----------
+    sample : dict
+        Loaded case sample from a .pt file.
 
-    Args:
-        sample (dict): Loaded PyTorch dictionary containing 'input_fields',
-            'output_fields', and optional 'meta'.
-
-    Returns:
-        tuple:
-            dict: Flat mapping of extracted fields.
-            list[str]: Missing or inconsistent field names.
+    Returns
+    -------
+    tuple:
+        dict: Extracted fields as NumPy arrays.
+        list: List of missing or inconsistent field names.
 
     """
     row: dict[str, Any] = {}
     missing: list[str] = []
 
+    # ---------------------------
+    # input_fields (ALL)
+    # ---------------------------
     input_fields = sample.get("input_fields", {}) or {}
-    for key in ("x", "y"):
-        val = _to_numpy(input_fields.get(key))
-        if val is None:
-            missing.append(f"input_fields.{key}")
-        row[key] = val
+    if not isinstance(input_fields, dict):
+        missing.append("input_fields (non-dict)")
+        input_fields = {}
 
-    for k, v in input_fields.items():
-        if k.startswith("kappa"):
-            val = _to_numpy(v)
-            if val is None:
-                missing.append(f"input_fields.{k}")
-            row[k] = val
+    for name, value in input_fields.items():
+        arr = _to_numpy(value)
+        if arr is None:
+            missing.append(f"input_fields.{name}")
+        row[name] = arr
 
+    # ---------------------------
+    # output_fields (ALL)
+    # ---------------------------
     output_fields = sample.get("output_fields", {}) or {}
-    for key in ("p", "u", "v", "U"):
-        val = _to_numpy(output_fields.get(key))
-        if val is None:
-            missing.append(f"output_fields.{key}")
-        row[key] = val
+    if not isinstance(output_fields, dict):
+        missing.append("output_fields (non-dict)")
+        output_fields = {}
 
+    for name, value in output_fields.items():
+        arr = _to_numpy(value)
+        if arr is None:
+            missing.append(f"output_fields.{name}")
+        row[name] = arr
+
+    # ---------------------------
+    # meta (untouched)
+    # ---------------------------
     meta = sample.get("meta", {}) or {}
     if not isinstance(meta, dict):
         missing.append("meta (non-dict)")
@@ -133,28 +150,31 @@ def generate_eda_dataframe(
     """
     Load all `.pt` cases of a COMSOL batch and assemble them into a DataFrame.
 
-    Args:
-        dataset_name (str): Name of the COMSOL batch folder (e.g. "batch_var0.5").
-        base_dir (str, optional): Base directory containing the batch folders.
-            Defaults to "../../data/raw".
-        show_progress (bool, optional): Whether to show a tqdm progress bar.
-            Defaults to False.
-        max_cases (int, optional): If given, limits how many cases are loaded
-            (starting from the first).
+    All input_fields and output_fields are collected automatically.
+    No field names are hard-coded. Fully future-proof.
 
-    Returns:
-        tuple:
-            pd.DataFrame: Indexed by case number with columns
-                ['x', 'y', all 'kappa*', 'p', 'u', 'v', 'U', 'meta'].
-            list[str]: Log messages describing loading steps and warnings.
+    Parameters
+    ----------
+    dataset_name : str
+        Name of the dataset batch.
+    base_dir : str
+        Base directory containing dataset batches.
+    show_progress : bool
+        If True, displays a progress bar during loading.
+    max_cases : int or None
+        Maximum number of cases to load. If None, loads all cases.
 
-    Raises:
-        FileNotFoundError: If required directories or `.pt` files are missing.
-        RuntimeError: If a case file cannot be loaded or has unexpected structure.
-        TypeError: If a `.pt` file does not contain a dict.
+    Returns
+    -------
+    tuple
+        pd.DataFrame
+            DataFrame containing all extracted fields and meta.
+        list[str]
+            Log messages generated during loading.
 
     """
     logs: list[str] = []
+
     base = Path(base_dir)
     batch_dir = base / dataset_name
     cases_dir = batch_dir / "cases"
@@ -168,7 +188,7 @@ def generate_eda_dataframe(
 
     indexed_cases = _iter_cases_sorted(cases_dir)
     if not indexed_cases:
-        msg = f"No .pt files found in {cases_dir}."
+        msg = f"No .pt files found in {cases_dir}"
         raise FileNotFoundError(msg)
 
     if max_cases is not None and max_cases < len(indexed_cases):
@@ -179,12 +199,12 @@ def generate_eda_dataframe(
 
     logs.append(f"[INFO] Batch: '{dataset_name}' from {cases_dir}")
 
-    # --- meta.pt loading ---
+    # --- meta.pt (optional, informational only) -------------------------
     try:
         meta_batch = torch.load(batch_dir / "meta.pt", map_location="cpu")
         if isinstance(meta_batch, dict):
-            short_keys = ", ".join(list(meta_batch.keys())[:5])
-            logs.append(f"[INFO] meta.pt loaded (keys: {short_keys} ...)")
+            keys_preview = ", ".join(list(meta_batch.keys())[:5])
+            logs.append(f"[INFO] meta.pt loaded (keys: {keys_preview} ...)")
         else:
             logs.append("[WARN] meta.pt present but not a dict.")
     except FileNotFoundError:
@@ -196,12 +216,14 @@ def generate_eda_dataframe(
     if show_progress:
         from tqdm.auto import tqdm  # noqa: PLC0415
 
-        iterator = tqdm(indexed_cases, desc="Loading cases", unit="case")
+        iterator = tqdm(iterator, desc="Loading cases", unit="case")
 
     rows: list[dict[str, Any]] = []
     indices: list[int] = []
-    all_kappa_keys: set[str] = set()
 
+    # ------------------------------------------------------------------
+    # Main loading loop (FULLY DATA-DRIVEN)
+    # ------------------------------------------------------------------
     for case_idx, path in iterator:
         try:
             sample = torch.load(path, map_location="cpu")
@@ -215,32 +237,28 @@ def generate_eda_dataframe(
 
         row, missing = _extract_fields(sample)
         if missing:
-            miss_list = ", ".join(missing)
-            logs.append(f"[WARN] Case {case_idx:04d}: missing or inconsistent fields: {miss_list}")
-
-        for k in row:
-            if k.startswith("kappa"):
-                all_kappa_keys.add(k)
+            logs.append(f"[WARN] Case {case_idx:04d}: missing or inconsistent fields: {', '.join(missing)}")
 
         rows.append(row)
         indices.append(case_idx)
 
-    kappa_cols = sorted(all_kappa_keys)
-    preferred_order = ["x", "y", *kappa_cols, "p", "u", "v", "U", "meta"]
-
-    df = pd.DataFrame(rows, index=indices)
-    for col in preferred_order:
-        if col not in df.columns:
-            df[col] = None
-    df = df.loc[:, preferred_order]
-    df = df.sort_index()
+    # ------------------------------------------------------------------
+    # Assemble DataFrame
+    # ------------------------------------------------------------------
+    df = pd.DataFrame(rows, index=indices).sort_index()
 
     logs.append(f"[INFO] Final DataFrame contains {len(df)} cases.")
-    logs.append(f"[INFO] kappa columns: {', '.join(kappa_cols) if kappa_cols else '-'}")
+    logs.append(f"[INFO] Columns: {', '.join(df.columns)}")
 
-    # --- shape preview ---
-    shape_keys = ["x", "y", *kappa_cols, "p", "u", "v", "U"]
-    shapes_preview = {key: (None if df[key].isna().all() else getattr(df[key].dropna().iloc[0], "shape", None)) for key in shape_keys}
+    # --- shape preview (best-effort) -----------------------------------
+    shapes_preview: dict[str, Any] = {}
+    for col in df.columns:
+        series = df[col].dropna()
+        if not series.empty:
+            shapes_preview[col] = getattr(series.iloc[0], "shape", None)
+        else:
+            shapes_preview[col] = None
+
     logs.append(f"[INFO] Example shapes: {shapes_preview}")
 
     return df, logs

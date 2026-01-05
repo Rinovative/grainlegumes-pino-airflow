@@ -2,11 +2,11 @@
 Case-level statistics plots for PINO/FNO EDA.
 
 Distributions derived from:
-    1) meta["statistics"]
-    2) meta["parameters"]
+    1) meta["generator"][*]["statistics"]
+    2) meta["generator"][*]["parameters"]
     3) reduced field statistics (min/mean/max per case)
 
-Compatible with casecount viewer + dataset toggle.
+Fully data-driven and future-proof.
 """
 
 from __future__ import annotations
@@ -30,130 +30,66 @@ if TYPE_CHECKING:
 
     from src.util.util_plot_components import CheckboxGroup
 
+
 # ============================================================================
 # TYPES
 # ============================================================================
 
 
 class _StatCache(TypedDict):
-    """
-    Cache structure for meta statistics.
-
-    Attributes
-    ----------
-    loaded : int
-        Number of loaded cases.
-    cols : dict[str, list[float]]
-        Dictionary mapping statistic keys to lists of float values.
-
-    """
-
     loaded: int
     cols: dict[str, list[float]]
 
 
 class _ParamCache(TypedDict):
-    """
-    Cache structure for meta parameters.
-
-    Attributes
-    ----------
-    loaded : int
-        Number of loaded cases.
-    cols : dict[str, list[float]]
-        Dictionary mapping parameter keys to lists of float values.
-
-    """
-
     loaded: int
     cols: dict[str, list[float]]
 
 
 class _FieldCache(TypedDict):
-    """
-    Cache structure for field value statistics.
-
-    Attributes
-    ----------
-    loaded : int
-        Number of loaded cases.
-    data : dict[str, dict[str, list[float]]]
-        Dictionary mapping field names to their statistics (min, mean, max) lists.
-
-    """
-
     loaded: int
     data: dict[str, dict[str, list[float]]]
 
 
-# =============================================================================
-# CONSTANTS
-# =============================================================================
-
-FIELDS = ["kappaxx", "kappayy", "p", "u", "v", "U"]
-FIELD_STATS = ["min", "mean", "max"]
-
-META_BINS = 40
-META_NCOLS = 4
-
-PARAMETER_ORDER = [
-    "k_mean",
-    "var_rel",
-    "corr_len_rel",
-    "ms_scale",
-    "coupling",
-    "volume_fraction",
-    "lognormal",
-    "aniso_major",
-    "aniso_minor",
-    "aniso_ratio",
-    "ms_w1",
-    "ms_w2",
-]
-
-# Parameter where log10 is meaningful
-LOG_PARAMETER_KEYS = {
-    "k_mean",
-    "var_rel",
-    "corr_len_rel",
-    "ms_scale",
-    "aniso_ratio",
-}
-
-
-# =============================================================================
+# ============================================================================
 # HELPERS
-# =============================================================================
+# ============================================================================
 
 
-def _as_float(x: Any) -> float:
+def _as_float(x: Any) -> float | None:
     """
-    Convert x to float.
-
-    If x is None, return nan.
-    If x is a list/array with one element, return that element as float.
+    Convert x to float if possible.
 
     Parameters
     ----------
     x : Any
-        Input value to convert.
+        Input value.
 
     Returns
     -------
-        float
-            Converted float value.
+    float or None
+        Converted float value, or None if conversion is not possible.
 
     """
     if x is None:
-        return float("nan")
+        return None
+
     if isinstance(x, (int, float, np.integer, np.floating)):
         return float(x)
-    return float(np.asarray(x).item())
+
+    if isinstance(x, (list, tuple, np.ndarray)):
+        arr = np.asarray(x)
+        if arr.size == 1 and np.issubdtype(arr.dtype, np.number):
+            return float(arr.item())
+        return None
+
+    # everything else (str, dict, enum, ...)
+    return None
 
 
 def _flatten_dict_raw(dct: dict[str, Any]) -> dict[str, float]:
     """
-    Flatten a nested dictionary into a single-level dictionary with compound keys.
+    Flatten nested dictionary into a single-level dictionary with float values.
 
     Parameters
     ----------
@@ -163,7 +99,7 @@ def _flatten_dict_raw(dct: dict[str, Any]) -> dict[str, float]:
     Returns
     -------
     dict[str, float]
-        Flattened dictionary with compound keys and float values.
+        Flattened dictionary with float values.
 
     """
     out: dict[str, float] = {}
@@ -173,11 +109,15 @@ def _flatten_dict_raw(dct: dict[str, Any]) -> dict[str, float]:
             for k, v in obj.items():
                 _rec(f"{key}_{k}", v)
             return
+
         if isinstance(obj, (list, tuple, np.ndarray)) and not np.isscalar(obj):
             for i, v in enumerate(obj):
                 _rec(f"{key}_{i}", v)
             return
-        out[key] = _as_float(obj)
+
+        val = _as_float(obj)
+        if val is not None:
+            out[key] = val
 
     for k, v in dct.items():
         _rec(k, v)
@@ -185,58 +125,7 @@ def _flatten_dict_raw(dct: dict[str, Any]) -> dict[str, float]:
     return out
 
 
-def _flatten_parameters_ordered(dct: dict[str, Any]) -> dict[str, float]:
-    """
-    Flatten parameters dictionary into a single-level dictionary with specific keys.
-
-    Parameters
-    ----------
-    dct : dict[str, Any]
-        Input parameters dictionary.
-
-    Returns
-    -------
-    dict[str, float]
-        Flattened dictionary with specific keys and float values.
-
-    """
-    out: dict[str, float] = {}
-
-    out["k_mean"] = _as_float(dct.get("k_mean"))
-    out["var_rel"] = _as_float(dct.get("var_rel"))
-    out["corr_len_rel"] = _as_float(dct.get("corr_len_rel"))
-    out["ms_scale"] = _as_float(dct.get("ms_scale"))
-    out["coupling"] = _as_float(dct.get("coupling"))
-    out["volume_fraction"] = _as_float(dct.get("volume_fraction"))
-    out["lognormal"] = _as_float(dct.get("lognormal"))
-
-    aniso = dct.get("anisotropy", [np.nan, np.nan])
-    out["aniso_major"] = _as_float(aniso[0])
-    out["aniso_minor"] = _as_float(aniso[1])
-    out["aniso_ratio"] = out["aniso_major"] / out["aniso_minor"] if np.isfinite(out["aniso_minor"]) and out["aniso_minor"] != 0 else np.nan
-
-    msw = dct.get("ms_weight", [np.nan, np.nan])
-    out["ms_w1"] = _as_float(msw[0])
-    out["ms_w2"] = _as_float(msw[1])
-
-    return out
-
-
 def _selected_datasets(dataset_selector: CheckboxGroup) -> list[str]:
-    """
-    Get the list of selected datasets from the dataset selector.
-
-    Parameters
-    ----------
-    dataset_selector : CheckboxGroup
-        Dataset selector widget.
-
-    Returns
-    -------
-    list[str]
-        List of selected dataset names.
-
-    """
     active = [n for n, cb in dataset_selector.boxes.items() if cb.value]
     if not active:
         msg = "Select at least one dataset."
@@ -244,37 +133,112 @@ def _selected_datasets(dataset_selector: CheckboxGroup) -> list[str]:
     return active
 
 
-def _maybe_log_parameter(vals: np.ndarray, *, key: str, use_log: bool) -> np.ndarray:
+def _clip_for_plot(vals: np.ndarray, *, q_low: float = 1.0, q_high: float = 99.0) -> np.ndarray:
     """
-    Apply log10 transformation to parameter values if applicable.
+    Clip extreme values based on percentiles for better plotting.
 
     Parameters
     ----------
     vals : np.ndarray
-        Array of parameter values.
-    key : str
-        Parameter key.
-    use_log : bool
-        Whether to apply log10 transformation.
+        Input values.
+    q_low : float
+        Lower percentile threshold.
+    q_high : float
+        Upper percentile threshold.
 
     Returns
     -------
     np.ndarray
-        Transformed array of parameter values.
+        Clipped values.
 
     """
-    if not use_log or key not in LOG_PARAMETER_KEYS:
+    vals = vals[np.isfinite(vals)]
+    if vals.size < 2:  # noqa: PLR2004
         return vals
 
-    vals = vals[np.isfinite(vals) & (vals > 0)]
-    if vals.size == 0:
+    lo, hi = np.percentile(vals, [q_low, q_high])
+    if lo >= hi:
         return vals
-    return np.log10(vals)
+
+    return vals[(vals >= lo) & (vals <= hi)]
 
 
-# =============================================================================
-# HIST GRID (USED BY 1.1 + 1.2)
-# =============================================================================
+# ============================================================================
+# DATA-DRIVEN BINNING + LAYOUT
+# ============================================================================
+
+
+def _infer_bins(vals: np.ndarray, *, min_bins: int = 10, max_bins: int = 80) -> int:
+    """
+    Infer number of histogram bins using Freedman-Diaconis rule.
+
+    Parameters
+    ----------
+    vals : np.ndarray
+        Input values.
+    min_bins : int
+        Minimum number of bins.
+    max_bins : int
+        Maximum number of bins.
+
+    Returns
+    -------
+    int
+        Inferred number of bins.
+
+    """
+    vals = vals[np.isfinite(vals)]
+    if vals.size < 2:  # noqa: PLR2004
+        return 1
+
+    vmin = float(np.min(vals))
+    vmax = float(np.max(vals))
+
+    if not np.isfinite(vmin) or not np.isfinite(vmax):
+        return 1
+    if vmin == vmax:
+        return 1
+
+    if np.isclose(vmin, vmax, rtol=0.0, atol=1e-14):
+        return 1
+
+    q25, q75 = np.percentile(vals, [25, 75])
+    iqr = float(q75 - q25)
+
+    if iqr <= 0.0:
+        return int(np.clip(min_bins, 1, max_bins))
+
+    bw = 2.0 * iqr * vals.size ** (-1.0 / 3.0)
+    if not np.isfinite(bw) or bw <= 0.0:
+        return int(np.clip(min_bins, 1, max_bins))
+
+    bins = int(np.ceil((vmax - vmin) / bw))
+    return int(np.clip(bins, 1, max_bins))
+
+
+def _infer_ncols(n_items: int, *, max_cols: int = 5) -> int:
+    """
+    Infer number of columns for subplot grid layout.
+
+    Parameters
+    ----------
+    n_items : int
+        Number of items to plot.
+    max_cols : int
+        Maximum number of columns.
+
+    Returns
+    -------
+    int
+        Inferred number of columns.
+
+    """
+    return min(max_cols, max(1, int(np.ceil(np.sqrt(n_items)))))
+
+
+# ============================================================================
+# HIST GRID (GENERIC)
+# ============================================================================
 
 
 def _hist_grid(
@@ -283,25 +247,32 @@ def _hist_grid(
     active_datasets: list[str],
     columns: list[str],
     title: str,
-    bins: int,
-    ncols: int,
-    use_log: bool = False,
 ) -> Figure:
     """
-    Create a grid of histograms for the specified columns.
+    Create a grid of histogram plots for multiple datasets and columns.
 
-    - One fixed color per dataset
-    - Histogram and KDE share EXACT same distribution + color
-    - Stable legend
+    Parameters
+    ----------
+    data_by_dataset : dict[str, dict[str, np.ndarray]]
+        Data organized by dataset name and column name.
+    active_datasets : list[str]
+        List of active dataset names to plot.
+    columns : list[str]
+        List of column names to plot.
+    title : str
+        Title for the entire figure.
+
+    Returns
+    -------
+    Figure
+        Matplotlib Figure containing the histogram grid.
+
     """
-    # ------------------------------------------------------------------
-    # Fixed, high-contrast colors (dataset-level)
-    # ------------------------------------------------------------------
     cmap = plt.get_cmap("tab10")
     dataset_colors = {name: cmap(i % 10) for i, name in enumerate(active_datasets)}
 
-    n = len(columns)
-    nrows = math.ceil(n / ncols)
+    ncols = _infer_ncols(len(columns))
+    nrows = math.ceil(len(columns) / ncols)
 
     fig = plt.figure(figsize=(4.0 * ncols + 2.0, 2.8 * nrows))
     gs = fig.add_gridspec(
@@ -316,99 +287,79 @@ def _hist_grid(
     for r in range(nrows):
         for c in range(ncols):
             idx = r * ncols + c
-            if idx < n:
+            if idx < len(columns):
                 axes.append(fig.add_subplot(gs[r, c]))
 
-    # ------------------------------------------------------------------
-    # Legend axis
-    # ------------------------------------------------------------------
     ax_leg = fig.add_subplot(gs[:, -1])
     ax_leg.axis("off")
 
     legend_handles = [Line2D([], [], lw=6, color=dataset_colors[name], alpha=0.6) for name in active_datasets]
 
-    # ------------------------------------------------------------------
-    # Plotting
-    # ------------------------------------------------------------------
     for ax, key in zip(axes, columns, strict=False):
         for name in active_datasets:
             vals = data_by_dataset[name].get(key, np.array([]))
             vals = vals[np.isfinite(vals)]
-            vals = _maybe_log_parameter(vals, key=key, use_log=use_log)
-
             if vals.size < 2:  # noqa: PLR2004
                 continue
 
             color = dataset_colors[name]
+            bins = _infer_bins(vals)
 
-            # Histogram
-            _, bin_edges, _ = ax.hist(
-                vals,
-                bins=bins,
-                color=color,
-                alpha=0.35,
-            )
+            if bins == 1:
+                x0 = float(np.mean(vals))
+                width = 0.02 * max(1.0, abs(x0))
 
-            # KDE (same distribution, same color)
-            if np.nanstd(vals) > 0:
-                try:
-                    kde = gaussian_kde(vals)
-                    x = np.linspace(vals.min(), vals.max(), 300)
-                    bw = bin_edges[1] - bin_edges[0]
-                    ax.plot(
-                        x,
-                        kde(x) * vals.size * bw,
-                        color=color,
-                        lw=1.6,
-                    )
-                except LinAlgError:
-                    pass
+                ax.bar(
+                    x0,
+                    vals.size,
+                    width=width,
+                    color=color,
+                    alpha=0.35,
+                    align="center",
+                )
 
-        suffix = " (log10)" if use_log and key in LOG_PARAMETER_KEYS else ""
-        ax.set_title(f"{key}{suffix}", fontsize=10)
+            else:
+                _, bin_edges, _ = ax.hist(vals, bins=bins, color=color, alpha=0.35)
+
+                if np.nanstd(vals) > 0:
+                    try:
+                        kde = gaussian_kde(vals)
+                        x = np.linspace(vals.min(), vals.max(), 300)
+                        bw = bin_edges[1] - bin_edges[0]
+                        ax.plot(x, kde(x) * vals.size * bw, color=color, lw=1.6)
+                    except LinAlgError:
+                        pass
+
+        ax.set_title(key, fontsize=10)
         ax.set_xlabel("Value")
         ax.set_ylabel("Count")
         ax.grid(True, linestyle="--", alpha=0.25)
 
-    # ------------------------------------------------------------------
-    # Legend + finishing
-    # ------------------------------------------------------------------
-    ax_leg.legend(
-        legend_handles,
-        active_datasets,
-        title="Dataset",
-        loc="upper left",
-    )
-
+    ax_leg.legend(legend_handles, active_datasets, title="Dataset", loc="upper left")
     fig.suptitle(title)
-    fig.subplots_adjust(
-        top=0.93,
-        bottom=0.06,
-        left=0.06,
-        right=0.98,
-    )
+    fig.subplots_adjust(top=0.95, bottom=0.06, left=0.06, right=0.98)
 
     return fig
 
 
-# =============================================================================
-# 1-1. META STATISTICS (LINEAR)
-# =============================================================================
+# ============================================================================
+# 1-1. META STATISTICS (AUTO)
+# ============================================================================
 
 
 def plot_meta_statistics(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
     """
-    Plot meta statistics distributions.
+    Plot meta statistics distributions from datasets.
 
     Parameters
     ----------
     datasets : dict[str, pd.DataFrame]
-        Dictionary of datasets with their corresponding DataFrames.
+        Dictionary of dataset names to DataFrames.
 
     Returns
     -------
         widgets.VBox
-            A VBox widget containing the plot and controls.
+            VBox containing the plot and controls.
 
     """
     names = list(datasets.keys())
@@ -416,21 +367,21 @@ def plot_meta_statistics(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
 
     def _plot(max_cases: int, *, datasets: dict[str, pd.DataFrame], dataset_selector: CheckboxGroup) -> Figure:
         """
-        Plot meta statistics distributions for the selected datasets.
+        Plot function for case count viewer.
 
         Parameters
         ----------
         max_cases : int
-            Maximum number of cases to include in the plot.
+            Maximum number of cases to consider.
         datasets : dict[str, pd.DataFrame]
-            Dictionary of datasets with their corresponding DataFrames.
+            Dictionary of dataset names to DataFrames.
         dataset_selector : CheckboxGroup
             Dataset selector widget.
 
         Returns
         -------
-            Figure
-                A Matplotlib Figure object containing the plot.
+        Figure
+            Matplotlib Figure containing the histogram grid.
 
         """
         for name, df in datasets.items():
@@ -439,24 +390,35 @@ def plot_meta_statistics(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
                 continue
 
             for m in df.iloc[entry["loaded"] : max_cases]["meta"]:
-                flat = _flatten_dict_raw(m["statistics"])
-                for k, v in flat.items():
-                    entry["cols"].setdefault(k, []).append(v)
+                gen = m.get("generator", {})
+                for block in gen.values():
+                    stats = block.get("statistics", {})
+                    if isinstance(stats, dict) and stats:
+                        flat = _flatten_dict_raw(stats)
+                        for k, v in flat.items():
+                            entry["cols"].setdefault(k, []).append(v)
 
             entry["loaded"] = max_cases
 
         active = _selected_datasets(dataset_selector)
-        keys = sorted({k for n in active for k in cache[n]["cols"]})
+        keys = list(dict.fromkeys(k for n in active for k in cache[n]["cols"]))
 
-        data = {n: {k: np.asarray(cache[n]["cols"].get(k, [])) for k in keys} for n in active}
+        data = {
+            n: {
+                k: np.asarray(
+                    [v for v in cache[n]["cols"].get(k, []) if isinstance(v, (int, float, np.floating))],
+                    dtype=float,
+                )
+                for k in keys
+            }
+            for n in active
+        }
 
         return _hist_grid(
             data_by_dataset=data,
             active_datasets=active,
             columns=keys,
             title=f"Meta statistics distributions (first {max_cases} cases)",
-            bins=META_BINS,
-            ncols=META_NCOLS,
         )
 
     ds = util.util_plot_components.ui_checkbox_datasets(dataset_names=names)
@@ -470,50 +432,46 @@ def plot_meta_statistics(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
     )
 
 
-# =============================================================================
-# 1-2. META PARAMETERS (OPTIONAL LOG)
-# =============================================================================
+# ============================================================================
+# 1-2. META PARAMETERS (AUTO)
+# ============================================================================
 
 
 def plot_meta_parameters(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
     """
-    Plot meta parameters distributions.
+    Plot meta parameters distributions from datasets.
 
     Parameters
     ----------
     datasets : dict[str, pd.DataFrame]
-        Dictionary of datasets with their corresponding DataFrames.
+        Dictionary of dataset names to DataFrames.
 
     Returns
     -------
         widgets.VBox
-            A VBox widget containing the plot and controls.
+            VBox containing the plot and controls.
 
     """
     names = list(datasets.keys())
     cache: dict[str, _ParamCache] = {n: {"loaded": 0, "cols": {}} for n in names}
 
-    log_cb = util.util_plot_components.ui_checkbox_log_scale()
-
-    def _plot(max_cases: int, *, datasets: dict[str, pd.DataFrame], dataset_selector: CheckboxGroup, use_log: widgets.Checkbox) -> Figure:
+    def _plot(max_cases: int, *, datasets: dict[str, pd.DataFrame], dataset_selector: CheckboxGroup) -> Figure:
         """
-        Plot meta parameters distributions for the selected datasets.
+        Plot function for case count viewer.
 
         Parameters
         ----------
         max_cases : int
-            Maximum number of cases to include in the plot.
+            Maximum number of cases to consider.
         datasets : dict[str, pd.DataFrame]
-            Dictionary of datasets with their corresponding DataFrames.
+            Dictionary of dataset names to DataFrames.
         dataset_selector : CheckboxGroup
             Dataset selector widget.
-        use_log : widgets.Checkbox
-            Checkbox widget to indicate whether to use log scale.
 
         Returns
         -------
-            Figure
-                A Matplotlib Figure object containing the plot.
+        Figure
+            Matplotlib Figure containing the histogram grid.
 
         """
         for name, df in datasets.items():
@@ -522,25 +480,35 @@ def plot_meta_parameters(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
                 continue
 
             for m in df.iloc[entry["loaded"] : max_cases]["meta"]:
-                flat = _flatten_parameters_ordered(m["parameters"])
-                for k in PARAMETER_ORDER:
-                    entry["cols"].setdefault(k, []).append(flat.get(k, np.nan))
+                gen = m.get("generator", {})
+                for block in gen.values():
+                    params = block.get("parameters", {})
+                    if isinstance(params, dict) and params:
+                        flat = _flatten_dict_raw(params)
+                        for k, v in flat.items():
+                            entry["cols"].setdefault(k, []).append(v)
 
             entry["loaded"] = max_cases
 
         active = _selected_datasets(dataset_selector)
-        keys = [k for k in PARAMETER_ORDER if any(k in cache[n]["cols"] for n in active)]
+        keys = list(dict.fromkeys(k for n in active for k in cache[n]["cols"]))
 
-        data = {n: {k: np.asarray(cache[n]["cols"].get(k, [])) for k in keys} for n in active}
+        data = {
+            n: {
+                k: np.asarray(
+                    [v for v in cache[n]["cols"].get(k, []) if isinstance(v, (int, float, np.floating))],
+                    dtype=float,
+                )
+                for k in keys
+            }
+            for n in active
+        }
 
         return _hist_grid(
             data_by_dataset=data,
             active_datasets=active,
             columns=keys,
             title=f"Meta parameter distributions (first {max_cases} cases)",
-            bins=META_BINS,
-            ncols=META_NCOLS,
-            use_log=use_log.value,
         )
 
     ds = util.util_plot_components.ui_checkbox_datasets(dataset_names=names)
@@ -549,64 +517,74 @@ def plot_meta_parameters(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
         datasets=datasets,
         start_cases=250,
         step_size=50,
-        extra_widgets=[ds, log_cb],
+        extra_widgets=[ds],
         dataset_selector=ds,
-        use_log=log_cb,
     )
 
 
-# =============================================================================
-# 1-3. FIELD VALUE DISTRIBUTIONS (LINEAR)
-# =============================================================================
+# ============================================================================
+# 1-3. FIELD VALUE DISTRIBUTIONS (AUTO)
+# ============================================================================
 
 
 def plot_field_value_distributions(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
     """
-    Plot field value distributions for the given datasets.
+    Plot field value distributions from datasets.
 
     Parameters
     ----------
     datasets : dict[str, pd.DataFrame]
-        Dictionary of datasets with their corresponding DataFrames.
+        Dictionary of dataset names to DataFrames.
 
     Returns
     -------
         widgets.VBox
-            A VBox widget containing the plot and controls.
+            VBox containing the plot and controls.
 
     """
     names = list(datasets.keys())
 
+    # infer fields dynamically from first dataset
+    sample_df = next(iter(datasets.values()))
+    field_names = [c for c in sample_df.columns if c != "meta"]
+
     cache: dict[str, _FieldCache] = {
         n: {
             "loaded": 0,
-            "data": {f: {s: [] for s in FIELD_STATS} for f in FIELDS},
+            "data": {f: {"min": [], "mean": [], "max": []} for f in field_names},
         }
         for n in names
     }
 
-    # ------------------------------------------------------------------
-    # FIXED, HIGH-CONTRAST COLORS (one per dataset)
-    # ------------------------------------------------------------------
     cmap = plt.get_cmap("tab10")
     dataset_colors = {name: cmap(i % 10) for i, name in enumerate(names)}
 
-    def _plot(
-        max_cases: int,
-        *,
-        datasets: dict[str, pd.DataFrame],
-        dataset_selector: CheckboxGroup,
-    ) -> Figure:
-        # ------------------------------------------------------------
-        # Cache update
-        # ------------------------------------------------------------
+    def _plot(max_cases: int, *, datasets: dict[str, pd.DataFrame], dataset_selector: CheckboxGroup) -> Figure:
+        """
+        Plot function for case count viewer.
+
+        Parameters
+        ----------
+        max_cases : int
+            Maximum number of cases to consider.
+        datasets : dict[str, pd.DataFrame]
+            Dictionary of dataset names to DataFrames.
+        dataset_selector : CheckboxGroup
+            Dataset selector widget.
+
+        Returns
+        -------
+        Figure
+            Matplotlib Figure containing the histogram grid.
+
+        """
         for name, df in datasets.items():
             entry = cache[name]
             if max_cases <= entry["loaded"]:
                 continue
 
             for _, row in df.iloc[entry["loaded"] : max_cases].iterrows():
-                for f in FIELDS:
+                for f in field_names:
                     arr = np.asarray(row[f])
                     if arr.size == 0:
                         continue
@@ -618,16 +596,8 @@ def plot_field_value_distributions(*, datasets: dict[str, pd.DataFrame]) -> widg
 
         active = _selected_datasets(dataset_selector)
 
-        # ------------------------------------------------------------
-        # Legend handles (dataset-level, fixed color)
-        # ------------------------------------------------------------
-        legend_handles = [Line2D([], [], lw=6, color=dataset_colors[name], alpha=0.6) for name in active]
-
-        # ------------------------------------------------------------
-        # Figure layout
-        # ------------------------------------------------------------
-        nrows = len(FIELDS)
-        ncols = len(FIELD_STATS)
+        nrows = len(field_names)
+        ncols = 3
 
         fig = plt.figure(figsize=(12.5, 2.4 * nrows))
         gs = fig.add_gridspec(
@@ -639,54 +609,52 @@ def plot_field_value_distributions(*, datasets: dict[str, pd.DataFrame]) -> widg
         )
 
         axes = [[fig.add_subplot(gs[i, j]) for j in range(ncols)] for i in range(nrows)]
-
         ax_leg = fig.add_subplot(gs[:, -1])
         ax_leg.axis("off")
 
-        # ------------------------------------------------------------
-        # Plotting
-        # ------------------------------------------------------------
-        for i, f in enumerate(FIELDS):
-            for j, s in enumerate(FIELD_STATS):
+        legend_handles = [Line2D([], [], lw=6, color=dataset_colors[name], alpha=0.6) for name in active]
+
+        for i, f in enumerate(field_names):
+            for j, stat in enumerate(["min", "mean", "max"]):
                 ax = axes[i][j]
 
                 for name in active:
-                    vals = np.asarray(cache[name]["data"][f][s])
-                    vals = vals[np.isfinite(vals)]
-
+                    vals = np.asarray(cache[name]["data"][f][stat])
+                    vals = _clip_for_plot(vals)
                     if vals.size < 2:  # noqa: PLR2004
                         continue
 
                     color = dataset_colors[name]
+                    bins = _infer_bins(vals)
 
-                    # Histogram
-                    _, bin_edges, _ = ax.hist(
-                        vals,
-                        bins=META_BINS,
-                        color=color,
-                        alpha=0.35,
-                    )
+                    if bins == 1:
+                        # --- single-value spike instead of full-width histogram ---
+                        x0 = float(np.mean(vals))
+                        width = 0.02 * max(1.0, abs(x0))
 
-                    # KDE with EXACT SAME DISTRIBUTION + COLOR
-                    if np.nanstd(vals) > 0:
-                        try:
-                            kde = gaussian_kde(vals)
-                            x = np.linspace(vals.min(), vals.max(), 300)
-                            bw = bin_edges[1] - bin_edges[0]
-                            ax.plot(
-                                x,
-                                kde(x) * vals.size * bw,
-                                color=color,
-                                lw=1.6,
-                            )
-                        except LinAlgError:
-                            pass
+                        ax.bar(
+                            x0,
+                            vals.size,
+                            width=width,
+                            color=color,
+                            alpha=0.35,
+                            align="center",
+                        )
 
-                # Column titles
+                    else:
+                        _, bin_edges, _ = ax.hist(vals, bins=bins, color=color, alpha=0.35)
+
+                        if np.nanstd(vals) > 0:
+                            try:
+                                kde = gaussian_kde(vals)
+                                x = np.linspace(vals.min(), vals.max(), 300)
+                                bw = bin_edges[1] - bin_edges[0]
+                                ax.plot(x, kde(x) * vals.size * bw, color=color, lw=1.6)
+                            except LinAlgError:
+                                pass
+
                 if i == 0:
-                    ax.set_title(s)
-
-                # Row labels
+                    ax.set_title(stat)
                 if j == 0:
                     ax.set_ylabel("Count")
                     ax.annotate(
@@ -703,28 +671,13 @@ def plot_field_value_distributions(*, datasets: dict[str, pd.DataFrame]) -> widg
                 ax.set_xlabel("Value")
                 ax.grid(True, linestyle="--", alpha=0.25)
 
-        # ------------------------------------------------------------
-        # Legend + finishing
-        # ------------------------------------------------------------
-        ax_leg.legend(
-            legend_handles,
-            active,
-            title="Dataset",
-            loc="upper left",
-        )
-
+        ax_leg.legend(legend_handles, active, title="Dataset", loc="upper left")
         fig.suptitle(f"Field value distributions per channel (first {max_cases} cases)")
-        fig.subplots_adjust(
-            top=0.95,
-            bottom=0.06,
-            left=0.06,
-            right=0.97,
-        )
+        fig.subplots_adjust(top=0.96, bottom=0.06, left=0.06, right=0.97)
 
         return fig
 
     ds = util.util_plot_components.ui_checkbox_datasets(dataset_names=names)
-
     return util.util_plot.make_casecount_viewer(
         plot_func=_plot,
         datasets=datasets,

@@ -22,6 +22,58 @@ if TYPE_CHECKING:
 
 
 # ======================================================================
+# Internal DataFrame utilities
+# ======================================================================
+def _infer_field_keys(df: pd.DataFrame) -> list[str]:
+    """
+    Infer 2D field keys from a DataFrame by inspecting the first row.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        DataFrame containing simulation case data.
+
+    Returns
+    -------
+    list[str]
+        List of column names corresponding to 2D numeric fields.
+
+    """
+    keys: list[str] = []
+
+    sample = df.iloc[0]
+    for col in df.columns:
+        if col in {"x", "y", "meta"}:
+            continue
+
+        arr = np.asarray(sample[col])
+        if arr.ndim == 2 and np.issubdtype(arr.dtype, np.number):
+            keys.append(col)
+
+    return keys
+
+
+def _infer_ncols(n_items: int, *, max_cols: int = 4) -> int:
+    """
+    Infer a suitable number of subplot columns for a given number of items.
+
+    Parameters
+    ----------
+    n_items : int
+        Total number of items to plot.
+    max_cols : int
+        Maximum number of columns allowed.
+
+    Returns
+    -------
+    int
+        Number of columns to use for subplots.
+
+    """
+    return min(max_cols, max(1, int(np.ceil(np.sqrt(n_items)))))
+
+
+# ======================================================================
 # Internal spectral utilities
 # ======================================================================
 
@@ -122,15 +174,6 @@ def _radial_spectrum(
 
 
 # ======================================================================
-# Field lists
-# ======================================================================
-
-INPUT_KEYS = ["kappaxx"]
-OUTPUT_KEYS = ["p", "U"]
-ALL_KEYS = INPUT_KEYS + OUTPUT_KEYS
-
-
-# ======================================================================
 # Interactive 2D spectral overview
 # ======================================================================
 
@@ -166,18 +209,27 @@ def plot_spectral_overview(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox
         """Plot a multi-field 2D PSD overview for a single simulation case."""
         row = df.iloc[idx]
 
-        fields = {key: np.asarray(row[key], float) for key in ALL_KEYS}
+        field_keys = _infer_field_keys(df)
+        fields = {key: np.asarray(row[key], float) for key in field_keys}
 
         x = np.asarray(row["x"])
         y = np.asarray(row["y"])
         dx = float(np.nanmedian(np.diff(np.unique(x))))
         dy = float(np.nanmedian(np.diff(np.unique(y))))
 
-        ncols = len(fields)
-        fig, axes = plt.subplots(1, ncols, figsize=(12, 4))
+        n_items = len(fields)
+        ncols = _infer_ncols(n_items, max_cols=4)
+        nrows = int(np.ceil(n_items / ncols))
+
+        fig, axes = plt.subplots(
+            nrows,
+            ncols,
+            figsize=(4.5 * ncols, 3.8 * nrows),
+            squeeze=False,
+        )
         axes = axes.ravel()
 
-        for ax, (label, field) in zip(axes, fields.items(), strict=True):
+        for ax, (label, field) in zip(axes[: len(fields)], fields.items(), strict=True):
             PSD, kx, ky = _fft2_psd(field, dx, dy)
             logPSD = np.log10(PSD + 1e-20)
 
@@ -193,13 +245,16 @@ def plot_spectral_overview(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox
                 vmax=vmax,
             )
             ax.set_title(f"{label} spectrum")
-            ax.set_xlabel("kx")
-            ax.set_ylabel("ky")
+            ax.set_xlabel(r"Wavenumber $k_x$ [$\frac{1}{m}$]")
+            ax.set_ylabel(r"Wavenumber $k_y$ [$\frac{1}{m}$]")
             ax.set_aspect("equal")
             fig.colorbar(im, ax=ax, fraction=0.045, pad=0.03)
 
+        for ax in axes[len(fields) :]:
+            ax.axis("off")
+
         fig.suptitle(f"2D spectral maps: {dataset_name} - Case {idx + 1}", fontsize=12, y=0.98)
-        fig.tight_layout()
+        fig.subplots_adjust(top=0.97, wspace=0.5, hspace=0.01)
         return fig
 
     return util.util_plot.make_interactive_case_viewer(
@@ -207,7 +262,6 @@ def plot_spectral_overview(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox
         datasets=datasets,
         start_idx=0,
         enable_dataset_dropdown=False,
-        enable_prev_next=True,
     )
 
 
@@ -245,25 +299,35 @@ def plot_spectral_vertical(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox
     def _plot(idx: int, *, df: pd.DataFrame, dataset_name: str) -> Figure:
         """Plot vertical (bottom/mid) radial spectra for a single case."""
         row = df.iloc[idx]
-        fields = {key: np.asarray(row[key], float) for key in ALL_KEYS}
+        field_keys = _infer_field_keys(df)
+        fields = {key: np.asarray(row[key], float) for key in field_keys}
 
         x_arr = np.asarray(row["x"])
         y_arr = np.asarray(row["y"])
         dx = float(np.nanmedian(np.diff(np.unique(x_arr))))
         dy = float(np.nanmedian(np.diff(np.unique(y_arr))))
 
-        ncols = len(fields)
-        fig, axes = plt.subplots(1, ncols, figsize=(12, 4))
+        n_items = len(fields)
+        ncols = _infer_ncols(n_items, max_cols=4)
+        nrows = int(np.ceil(n_items / ncols))
+
+        fig, axes = plt.subplots(
+            nrows,
+            ncols,
+            figsize=(4.2 * ncols, 3.8 * nrows),
+            squeeze=False,
+        )
         axes = axes.ravel()
 
-        y_coords = np.linspace(0, 1, fields[ALL_KEYS[0]].shape[0])
+        field_keys = list(fields.keys())
+        y_coords = np.linspace(0, 1, fields[field_keys[0]].shape[0])
         y_low, y_high = 0.05, 0.70
         win = 0.01
 
         mask_low = (y_coords >= y_low - win) & (y_coords <= y_low + win)
         mask_high = (y_coords >= y_high - win) & (y_coords <= y_high + win)
 
-        for ax, (label, field) in zip(axes, fields.items(), strict=True):
+        for ax, (label, field) in zip(axes[: len(fields)], fields.items(), strict=True):
             seg_low = np.atleast_2d(field[mask_low].mean(axis=0))
             seg_high = np.atleast_2d(field[mask_high].mean(axis=0))
 
@@ -273,15 +337,27 @@ def plot_spectral_vertical(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox
             k_low, E_low = _radial_spectrum(PSD_low, kx_low, ky_low)
             k_high, E_high = _radial_spectrum(PSD_high, kx_high, ky_high)
 
-            ax.loglog(k_low, E_low, lw=1.4, label=f"y={y_low:.2f}")
-            ax.loglog(k_high, E_high, lw=1.4, label=f"y={y_high:.2f}")
+            mask_l = (k_low > 0) & (E_low > 0)
+            mask_h = (k_high > 0) & (E_high > 0)
+
+            if np.count_nonzero(mask_l) > 1:
+                ax.loglog(k_low[mask_l], E_low[mask_l], lw=1.4, label=f"y={y_low:.2f}")
+
+            if np.count_nonzero(mask_h) > 1:
+                ax.loglog(k_high[mask_h], E_high[mask_h], lw=1.4, label=f"y={y_high:.2f}")
             ax.set_title(label)
-            ax.set_xlabel("k")
+            ax.set_xlabel(r"Wavenumber $k$ [$\frac{1}{m}$]")
+            ax.set_ylabel(r"Spectral energy $E(k)$")
             ax.grid(True, which="both", ls=":")
-            ax.legend(fontsize=8)
+            handles, _labels = ax.get_legend_handles_labels()
+            if handles:
+                ax.legend(fontsize=8)
+
+        for ax in axes[len(fields) :]:
+            ax.axis("off")
 
         fig.suptitle(f"Vertical spectral profiles: {dataset_name} - Case {idx + 1}", fontsize=12, y=0.98)
-        fig.tight_layout()
+        fig.subplots_adjust(top=0.94, wspace=0.40, hspace=0.3)
         return fig
 
     return util.util_plot.make_interactive_case_viewer(
@@ -289,5 +365,4 @@ def plot_spectral_vertical(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox
         datasets=datasets,
         start_idx=0,
         enable_dataset_dropdown=False,
-        enable_prev_next=True,
     )
