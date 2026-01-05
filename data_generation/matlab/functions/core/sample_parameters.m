@@ -21,10 +21,8 @@
 %   When method == 'sobol', an additional boolean column `simulate` is added
 %   to the output table. This column flags which Sobol samples should be
 %   physically simulated (e.g. with COMSOL).
-%
 %   The first X% of Sobol samples are marked as:
 %       simulate == true
-%
 %   The remaining samples are marked as:
 %       simulate == false
 %
@@ -44,22 +42,20 @@
 %   variation   – Variation factor: max multiplicative factor = (1 + variation)
 %   N           – Number of parameter sets to generate
 %   seed        – Random seed for reproducibility
-%   p_log       – Fraction of lognormal cases (optional)
 %   output_dir  – Output directory for saving CSV/JSON
 %
 % OUTPUTS
 %   Saves .csv and .json in output_dir
 % ============================================================
 
-function sample_parameters(method, variation, N, seed, p_log, output_dir)
+function sample_parameters(method, variation, N, seed, output_dir)
 
 %% --- Defaults ----------------------------------------------------------
 if nargin < 1, method = 'lhs'; end
-if nargin < 2, variation = 0.10; end
+if nargin < 2, variation = 0.20; end
 if nargin < 3, N = 200; end
 if nargin < 4, seed = 42; end
-if nargin < 5, p_log = 1.0; end
-if nargin < 6
+if nargin < 5
     this_file  = mfilename('fullpath');
     script_dir = fileparts(this_file);
     project_root = fullfile(script_dir, '..', '..');
@@ -74,24 +70,58 @@ valid_methods = ["uniform","lhs","sobol"];
 assert(any(strcmpi(method, valid_methods)), ...
     'Invalid method. Use ''uniform'', ''lhs'', or ''sobol''.');
 
-%% --- Base parameters ---------------------------------------------------
+%% --- Base parameter definition ----------------------------------------
 base = struct( ...
-    'k_mean',          5e-9, ...
-    'var_rel',         0.5, ...
-    'corr_len_rel',    0.05, ...
-    'anisotropy',      [3.0, 1.0], ...
-    'volume_fraction', 0.8, ...
-    'ms_weight',       [0.7, 0.3], ...
-    'ms_scale',        0.1, ...
-    'coupling',        0.5 ...
+    'k_mean',            5e-9, ...
+    'var_rel',           0.5, ...
+    'base_len_rel',      0.10, ...
+    'smooth_len_rel',    0.05, ...
+    'ms_weight',         [0.3, 0.7], ...
+    'anisotropy',        [3.0, 1.0], ...
+    'coupling',          0.5, ...
+    'noise_level',       0.2, ...
+    'noise_granularity', 0.5, ...
+    'noise_bias',        0.5, ...
+    'a_max',             2.0, ...
+    'a_gamma',           2.0, ...
+    'tensor_strength',   1.0, ...
+    'theta_jitter',      0.01, ...
+    'theta_smooth_rel',  0.1, ...
+    'A_rel',             2.0, ...
+    'phi_smooth_rel',    0.05, ...
+    'texture_amp',       0.005, ...
+    'p_inlet_mean',      350, ...
+    'a_sin',             0.03, ...
+    'f_sin',             0.75, ...
+    'phi_sin',           pi, ...
+    'k_gauss',           2, ...
+    'a_gauss',           0.05, ...
+    'sigma_gauss',       0.05, ...
+    'gauss_jitter',      0.25, ...
+    'a_lin',             0.025 ...
 );
 
-param_names = ["k_mean","var_rel","corr_len_rel","anisotropy_x","anisotropy_y", ...
-               "volume_fraction","ms_weight_c","ms_weight_f", ...
-               "ms_scale","coupling"];
+param_names = [ ...
+    "k_mean","var_rel", ...
+    "base_len_rel","smooth_len_rel", ...
+    "msW_c","msW_f", ...
+    "ani_x","ani_y", ...
+    "coupling", ...
+    "noise_level","noise_granularity","noise_bias", ...
+    "a_max","a_gamma","tensor_strength", ...
+    "theta_jitter","theta_smooth_rel", ...
+    "A_rel","phi_smooth_rel","texture_amp", ...
+    "p_inlet_mean", ...
+    "a_sin","f_sin","phi_sin", ...
+    "k_gauss","a_gauss","sigma_gauss","gauss_jitter", ...
+    "a_lin"
+];
+
 n_params = numel(param_names);
 
-%% --- Sampling setup ----------------------------------------------------
+%% === Parameter sampling ======================================
+
+% --- Sampling -------------------------------------------------
 switch lower(method)
     case 'uniform'
         X = rand(N, n_params);
@@ -103,96 +133,121 @@ switch lower(method)
         X = net(p, N);
 end
 
-%% --- Variation helpers -------------------------------------------------
-span = log(1 + variation);      % multiplicative factor range in log-space
-Z = 2*X - 1;                    % map to [-1, 1]
+Z    = 2*X - 1;               % [-1, 1]
+span = log(1 + variation);    % log-multiplicative span
 
-logit = @(x) log(x./(1-x));
+logit     = @(x) log(x./(1-x));
 inv_logit = @(z) 1 ./ (1 + exp(-z));
 
-%% --- Apply variation (log-space for >0 parameters) --------------------
-k_mean       = base.k_mean       .* exp(span * Z(:,1));
-var_rel      = base.var_rel      .* exp(span * Z(:,2));
-corr_len_rel = base.corr_len_rel .* exp(span * Z(:,3));
-anisotropy_x = base.anisotropy(1).* exp(span * Z(:,4));
-anisotropy_y = base.anisotropy(2).* exp(span * Z(:,5));
-ms_scale     = base.ms_scale     .* exp(span * Z(:,9));
+%% === Apply variations ========================================
 
-%% --- [0,1] parameters via logit-space ---------------------------------
-vol_frac_logit = logit(base.volume_fraction) + span * Z(:,6);
-volume_fraction = inv_logit(vol_frac_logit);
+% --- log-space (strictly positive) ----------------------------
+k_mean         = base.k_mean         .* exp(span * Z(:,1));
+var_rel        = base.var_rel        .* exp(span * Z(:,2));
 
-coupling_logit = logit(base.coupling) + span * Z(:,10);
-coupling = inv_logit(coupling_logit);
+base_len_rel   = base.base_len_rel   .* exp(span * Z(:,3));
+smooth_len_rel = base.smooth_len_rel .* exp(span * Z(:,4));
 
-%% --- ms-weight sampling (softmax ensures [0,1], sum=1) ----------------
-w_c_base = log(base.ms_weight(1));
-w_f_base = log(base.ms_weight(2));
+ani_x = base.anisotropy(1) .* exp(span * Z(:,7));
+ani_y = base.anisotropy(2) .* exp(span * Z(:,8));
 
-w_c = w_c_base + span * Z(:,7);
-w_f = w_f_base + span * Z(:,8);
+a_max           = base.a_max           .* exp(span * Z(:,13));
+a_gamma         = base.a_gamma         .* exp(span * Z(:,14));
+tensor_strength = base.tensor_strength .* exp(span * Z(:,15));
 
-w_exp = exp([w_c w_f]);
-ms_weight_c = w_exp(:,1) ./ sum(w_exp,2);
-ms_weight_f = w_exp(:,2) ./ sum(w_exp,2);
+theta_jitter     = base.theta_jitter     .* exp(span * Z(:,16));
+theta_smooth_rel = base.theta_smooth_rel .* exp(span * Z(:,17));
 
-%% --- Lognormal flag sampling ------------------------------------------
-lognormal = rand(N,1) < p_log;
+A_rel       = base.A_rel       .* exp(span * Z(:,18));
+texture_amp = base.texture_amp .* exp(span * Z(:,20));
 
-%% --- Assemble table ----------------------------------------------------
-T = table((1:N)', k_mean, var_rel, corr_len_rel, anisotropy_x, anisotropy_y, ...
-          volume_fraction, ms_weight_c, ms_weight_f, ms_scale, ...
-          coupling, lognormal, ...
-    'VariableNames', {'case_id','k_mean','var_rel','corr_len_rel', ...
-                      'ani_x','ani_y','vol_frac', ...
-                      'msW_c','msW_f','ms_scale','coupling','lognormal'});
+p_inlet_mean = base.p_inlet_mean .* exp(span * Z(:,21));
+sigma_gauss  = base.sigma_gauss  .* exp(span * Z(:,26));
+gauss_jitter = base.gauss_jitter .* exp(span * Z(:,27));
 
-%% --- Sobol-specific simulation flag -----------------------------------
+% --- logit-space ([0,1]) --------------------------------------
+coupling = inv_logit(logit(base.coupling) + span * Z(:,9));
+
+noise_level       = inv_logit(logit(base.noise_level)       + span * Z(:,10));
+noise_granularity = inv_logit(logit(base.noise_granularity) + span * Z(:,11));
+noise_bias        = inv_logit(logit(base.noise_bias)        + span * Z(:,12));
+
+phi_smooth_rel = inv_logit(logit(base.phi_smooth_rel) + span * Z(:,19));
+
+% --- linear (signed, symmetric) -------------------------------
+a_sin   = base.a_sin   .* (1 + variation * Z(:,22));
+f_sin   = base.f_sin   .* (1 + variation * Z(:,23));
+a_gauss = base.a_gauss .* (1 + variation * Z(:,25));
+a_lin   = base.a_lin   .* (1 + variation * Z(:,29));
+
+% --- phase (periodic) -----------------------------------------
+phi_sin = mod(base.phi_sin + variation*pi*Z(:,24), 2*pi);
+
+% --- discrete --------------------------------------------------
+k_gauss = round( ...
+    min(5, max(1, base.k_gauss + round(variation * 3 * Z(:,28)))) ...
+);
+
+% --- ms-weight (softmax, sum = 1) ------------------------------
+w_c = log(base.ms_weight(1)) + span * Z(:,5);
+w_f = log(base.ms_weight(2)) + span * Z(:,6);
+
+w = exp([w_c w_f]);
+msW_c = w(:,1) ./ sum(w,2);
+msW_f = w(:,2) ./ sum(w,2);
+
+%% === Assemble table ============================================
+T = table((1:N)', ...
+    k_mean, var_rel, ...
+    base_len_rel, smooth_len_rel, ...
+    msW_c, msW_f, ...
+    ani_x, ani_y, ...
+    coupling, ...
+    noise_level, noise_granularity, noise_bias, ...
+    a_max, a_gamma, tensor_strength, ...
+    theta_jitter, theta_smooth_rel, ...
+    A_rel, phi_smooth_rel, texture_amp, ...
+    p_inlet_mean, ...
+    a_sin, f_sin, phi_sin, ...
+    k_gauss, a_gauss, sigma_gauss, gauss_jitter, ...
+    a_lin, ...
+    'VariableNames', ['case_id', param_names]);
+
+
+%% === Sobol simulate flag =======================================
 if strcmpi(method,'sobol')
-    n_sim = 1000;                              % FIX number of GT/COMSOL cases
-
+    n_sim = min(1000, N);
     simulate = false(N,1);
-    simulate(1:n_sim) = true;                  % take first Sobol points
-
+    simulate(1:n_sim) = true;
     T.simulate = simulate;
-
-    % store as info only (not used for selection)
-    simulate_frac = n_sim / N;
 end
 
-%% --- Metadata ----------------------------------------------------------
+%% === Export ====================================================
+fname = sprintf('%s_var%.0f_seed%.0f', method, variation*100, seed);
+
+path_csv  = fullfile(output_dir, fname + ".csv");
+path_json = fullfile(output_dir, fname + ".json");
+
+% --- CSV ----------------------------------------------------
+writetable(T, path_csv, 'Delimiter',';');
+
+% --- JSON metadata ------------------------------------------
 meta = struct();
-meta.method      = method;
-meta.variation   = variation;
-meta.N           = N;
-meta.seed        = seed;
-meta.base        = base;
-meta.lognormal_p = p_log;
+meta.method    = method;
+meta.variation = variation;
+meta.N         = N;
+meta.seed      = seed;
+meta.base      = base;
 meta.param_names = param_names;
-meta.output_dir  = output_dir;
-meta.timestamp   = datestr(now,'yyyy-mm-dd HH:MM:SS');
+meta.timestamp = datestr(now,'yyyy-mm-dd HH:MM:SS');
 
 if strcmpi(method,'sobol')
     meta.sobol_n_sim = n_sim;
-    meta.sobol_simulate_fraction = simulate_frac;
+    meta.sobol_simulate_fraction = n_sim / N;
 end
 
-%% --- Output paths ------------------------------------------------------
-fname_base = sprintf('%s_var%.0f_plog%.0f_seed%.0f', ...
-    method, variation*100, p_log*100, seed);
-
-path_csv  = fullfile(output_dir, [fname_base '.csv']);
-path_json = fullfile(output_dir, [fname_base '.json']);
-
-%% --- Export ------------------------------------------------------------
-writetable(T, path_csv, 'Delimiter',';');
-
-fid_json = fopen(path_json,'w');
-fprintf(fid_json,'%s', jsonencode(struct('meta',meta,'n_cases',N), ...
-    'PrettyPrint',true));
-fclose(fid_json);
-
-disp("Parameter sampling completed:");
-disp("   → " + path_csv);
-
-end
+fid = fopen(path_json,'w');
+fprintf(fid,'%s', jsonencode(struct( ...
+    'meta', meta, ...
+    'n_cases', N ), 'PrettyPrint', true));
+fclose(fid);
