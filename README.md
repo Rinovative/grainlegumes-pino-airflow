@@ -1,4 +1,4 @@
-# GrainLegumes-PINO: Physics-Informed Neural Operators for Porous Media Flow  
+# GrainLegumes-PINOs: Physics-Informed Neural Operators for Porous Media Flow  
 ### *Specialization Project (VP1) – MSE Data Science, Autumn 2025*
 
 **Master of Science in Engineering – Major Data Science**  
@@ -10,31 +10,122 @@
 
 ## 📌 Project Overview
 
-This specialization project investigates the performance and applicability of **Physics-Informed Neural Operators (PINOs)** for simulating air flow in **porous granular media** such as agricultural grain beds.  
+This specialization project studies the learning of physically consistent surrogate models for incompressible air flow in **porous granular media** using **Physics-Informed Neural Operators (PINOs)**.
 
-Permeability fields κ are **generated in MATLAB** and solved via **COMSOL Multiphysics**.
-The goal is to train a 2-D PINO model in python that learns the mapping from permeability to pressure and velocity fields — effectively replacing expensive CFD solvers for design and optimization tasks.
+High-fidelity permeability and porosity fields are synthetically generated in **MATLAB** and simulated with **COMSOL Multiphysics** using a Darcy–Brinkman formulation.  
+The central objective is to train two-dimensional neural operators that learn the operator mapping
 
-The repository provides a complete, modular workflow covering:
-- 🧩 **Data generation** (MATLAB → COMSOL → PyTorch conversion)  
-- 📊 **Exploratory Data Analysis (EDA)** Spectral analysis of permeability κ, pressure p, and velocity U  
-- ⚙️ **PINO training and evaluation** using the `neuraloperator` library  
-- 📈 **Visualization and diagnostics** for convergence, residuals, and spectral errors  
-- 🧱 **Reproducible setup** via Docker and VS Code Dev Container  
+  **(κ, φ, p_bc) → (p, u, v)**
+
+from spatially varying permeability tensors κ, porosity fields φ, and inlet pressure boundary conditions p_bc to pressure and velocity fields, while explicitly enforcing physical consistency through PDE-based constraints.
+
+The repository provides a complete, modular research pipeline covering:
+- 🧩 **Physics-based data generation**  
+  A fully automated MATLAB-driven pipeline for synthetic porous-media data generation, including:
+  - **Parameter sampling**: space-filling sampling strategies (uniform, LHS, Sobol)
+  - **Structure synthesis**: stochastic multi-scale structure field generation as latent geometric backbone
+  - **Permeability construction**: physically consistent mapping to scalar and tensor-valued permeability fields
+  - **Porosity modelling**: independent porosity field generation with global Kozeny–Carman level anchoring
+  - **Boundary conditions**: low-dimensional, spatially varying inlet pressure boundary conditions
+  - **High-fidelity simulation**: batch-controlled Darcy–Brinkman simulations in COMSOL via LiveLink for MATLAB  
+  The pipeline supports resume-safe batch execution, reproducible seeding, and rich data export (CSV + JSON).
+
+- 📊 **Exploratory Data Analysis (EDA)**  
+  An interactive EDA framework including:
+  - **Statistical analysis**: case-level distributions of generator parameters, meta statistics, and reduced field statistics (min/mean/max)
+  - **Spectral analysis**: two-dimensional FFT-based analysis
+  - **Scale diagnostics**: isotropic radial energy spectra and vertical spectral evolution analysis
+
+- ⚙️ **Neural Operator training (FNO / U-NO / PINOs)**  
+  A modular, reproducible training framework for neural operator models, including:
+  - **Architectures**: FNO, U-NO, and physics-informed variants (PI-FNO, PI-U-NO)
+  - **Multi-field I/O**: spatial coordinates, tensor-valued permeability, porosity, inlet pressure → velocity components and pressure
+  - **Physics-informed learning**: COMSOL-consistent Brinkman PINO loss combining data fidelity and PDE residuals
+  - **Spectral diagnostics**: optional non-intrusive forward hooks on spectral convolution layers
+  - **Experiment tracking**: structured logging with full model, optimizer, scheduler, and loss configurations (wandb + checkpoints)  
+
+- 🧪 **High-fidelity evaluation framework**  
+  A full scientific evaluation suite for systematic model comparison and assessment, supporting both cross-model comparison on fixed datasets and cross-dataset generalisation analysis (ID and OOD), including:
+  - **Global error analysis**: L2 and relative L2 metrics, distributions, CDFs, mean and standard-deviation error maps, and frequency-domain error spectra  
+  - **Error decomposition**: error vs output magnitude and error vs distance to domain boundaries  
+  - **Physical consistency checks**: velocity divergence, mass conservation error maps, pressure boundary-condition consistency, and full Darcy–Brinkman operator residual evaluation  
+  - **Error sensitivity analysis**: parameter–error correlation heatmaps and parameter-wise error trend analysis  
+  - **Interactive sample inspection**: multi-field prediction, ground truth, and error viewer with permeability field visualisation  
+  - **Outlier and extreme-case analysis**: worst-case per output channel and extreme input parameter multi-field case viewer
+
+- 🧬 **Interactive research environment**  
+  All evaluation components are provided as interactive Jupyter widgets with dataset selection, case sliders and dynamic plots for systematic exploration of model behaviour.
 
 ---
 
 ## 🧭 Data Flow Overview
 
+<details>
+<summary><strong>Expand</strong></summary>
+
 ```mermaid
-graph LR
-A[MATLAB - Permeability field generator] --> B[COMSOL - Brinkman flow solver]
-B --> C[PyTorch dataset]
-C --> D[EDA - Spectral analysis]
-D --> E[PINO training - Physics-informed neural operator]
-E --> F[Evaluation - Residuals & spectral error maps]
-F --> G[Model checkpoints & reproducible results]
+flowchart TD
+
+A1[Parameter sampling  
+Uniform / LHS / Sobol]
+
+--> A2[Structure synthesis  
+Multi-scale stochastic geometry]
+
+--> A3[Permeability construction  
+Scalar & tensor fields κ]
+
+A2 --> A4[Porosity modelling  
+Field φ with Kozeny–Carman anchoring]
+A3 --> A4
+
+A4 --> A5[Boundary condition generation  
+Low-dimensional p_bc fields]
+
+A5 --> A6[Export generator outputs  
+Metadata (JSON)  
+Fields (CSV)]
+
+A6 --> B1[COMSOL Multiphysics  
+Import generator outputs]
+
+B1 --> B2[Brinkman flow solver  
+Compute p, u, v fields]
+
+B2 --> B3[Export simulation outputs  
+Fields (CSV)  
+Metadata (JSON)]
+
+B3 --> C1[Load CSV + JSON  
+Prune & compress metadata]
+
+C1 --> C2[Tensor construction  
+Normalize & transform fields]
+
+C2 --> C3[Automatic channel pruning]
+
+C3 --> C4[Build per-case files  
+Structured PyTorch case (.pt)]
+
+C4 --> D1[Build final dataset  
+Training-ready PyTorch (.pt)
+Merge all cases  
+Stack tensors]
+
+C4 --> D2[Exploratory Data Analysis  
+Statistical & spectral validation]
+
+D1 --> F[Neural Operator Training  
+FNO / U-NO / PINO  
+Physics-informed learning]
+
+F --> G[Scientific Evaluation  
+Error analysis  
+Physical consistency  
+Sensitivity & outlier studies]
 ```
+
+</details>
 
 ---
 
@@ -55,7 +146,7 @@ cd grainlegumes-pino
 ```
 1. Open the folder in VS Code  
 2. Reopen in Container (via prompt or `F1 → Dev Containers: Reopen in Container`)  
-3. Launch `PINO_Project_Rino_Albertin_GrainLegumes.ipynb` and run all cells  
+3. Launch one of the notebooks or trainingsskripts  
 
 </details>
 
@@ -124,7 +215,7 @@ Then open the URL shown in the terminal.
 │       │   ├── core/                                   # Core utilities for data generation and visualization
 │       │   │   ├── gen_permeability.m                  # Generates synthetic permeability fields κ(x)
 │       │   │   ├── run_comsol_case.m                   # Executes a single COMSOL simulation case
-│       │    │   ├── sample_parameters.m                 # Creates randomized parameter sets for DoE
+│       │   │   ├── sample_parameters.m                 # Creates randomized parameter sets for DoE
 │       │   │   └── visualize_case.m                    # Visualization helper for MATLAB/COMSOL outputs
 │       │   │
 │       │   └── test/                                   # MATLAB test routines for validation
