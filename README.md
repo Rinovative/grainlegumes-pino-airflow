@@ -89,11 +89,11 @@ flowchart TD
 
 M[MATLAB<br/>Synthetic Data Generator<br/>batch_run.m]
 D1[(Parameter Metadata<br/>data_generation/data/meta/<br/>batch_name.json<br/>batch_name.csv)]
-D2[(Generator Outputs<br/>data_generation/data/raw/<br/>batch_name/<br/>case_XXXX.json<br/>case_XXXX.csv)]
+D2[(Generator Outputs<br/>data_generation/data/raw/batch_name/<br/>case_XXXX.json<br/>case_XXXX.csv)]
 C[COMSOL Multiphysics<br/>Brinkman Flow Solver]
 D3[(Simulation Outputs<br/>data_generation/data/processed/batch_name/<br/>case_XXXX_sol.csv)]
 P[Python Pipeline<br/>Dataset Construction<br/>Model Training & Evaluation]
-D4[(Case Dataset<br/>data/raw/batch_name/<br/>meta.pt<br/>/cases/case_XXXX.pt<br/>)]
+D4[(Case Dataset<br/>data/raw/batch_name/<br/>meta.pt<br/>cases/case_XXXX.pt<br/>)]
 D5[(Training Dataset<br/>model_training/data/raw/batch_name/<br/>meta.pt<br/>batch_name.pt)]
 D6[(Model Artifacts<br/>model_training/data/processed/model_name/...)]
 
@@ -143,7 +143,7 @@ subgraph DG[DATA GENERATION]
             M4 --> M6
             M5 --> M6
         end
-        D2[(Generator Outputs<br/>data_generation/data/raw/<br/>batch_name/<br/>case_XXXX.json<br/>case_XXXX.csv)]
+        D2[(Generator Outputs<br/>data_generation/data/raw/batch_name/<br/>case_XXXX.json<br/>case_XXXX.csv)]
         M7[*run_comsol_case.m*<br/>Connect MATLAB via Live-Link to COMSOL]
 
         M1 --> D1
@@ -177,13 +177,13 @@ subgraph MT[MODEL TRAINING]
 
         P2[*build_batch_dataset.py*<br/>Assemble fields, prune metadata,<br/>detect unused channels]
 
-        D4[(Case Dataset<br/>data/raw/batch_name/<br/>meta.pt<br/>/cases/case_XXXX.pt<br/>)]
+        D4[(Case Dataset<br/>data/raw/batch_name/<br/>meta.pt<br/>cases/case_XXXX.pt<br/>)]
 
         P3[*merge_batch_cases.py*<br/>Select channels, stack tensors,<br/>build training dataset]
 
         D5[(Training Dataset<br/>model_training/data/raw/batch_name/<br/>meta.pt<br/>batch_name.pt)]
 
-        E1[EDA *eda.ipynb*<br/>Case-level statistics + spectral sanity checks]
+        E1{{EDA *eda.ipynb*<br/>Case-level statistics + spectral sanity checks}}
 
         %% -------------------------
         %% Data flow: dataset build
