@@ -1,7 +1,7 @@
 """
-Model training script for U-shaped Neural Operator (U-NO).
+Model training script for Physics-Informed U-shaped Neural Operator (PI-U-NO).
 
-This script sets up the U-NO model, optimizer, scheduler, loss functions,
+This script sets up the PI-U-NO model, optimizer, scheduler, loss functions,
 and launches the training process using the base training function.
 """
 
