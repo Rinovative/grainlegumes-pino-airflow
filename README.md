@@ -22,7 +22,7 @@ from spatially varying permeability tensors κ, porosity fields φ, and inlet pr
 The repository provides a complete, modular research pipeline covering:
 
 <details>
-<summary><strong>🧩 **Physics-based data generation**  </strong></summary>
+<summary><strong>🧩 **Data generation**  </strong></summary>
 
 A fully automated MATLAB-driven pipeline for synthetic porous-media data generation, including:
 - **Parameter sampling**: space-filling sampling strategies (uniform, LHS, Sobol)
@@ -61,9 +61,9 @@ A modular, reproducible training framework for neural operator models, including
 
 
 <details>
-<summary><strong>🧪 **High-fidelity evaluation framework**</strong></summary>
+<summary><strong>🧪 **Evaluation**</strong></summary>
 
-A full scientific evaluation suite for systematic model comparison and assessment, supporting both cross-model comparison on fixed datasets and cross-dataset generalisation analysis (ID and OOD), including:
+A evaluation suite for systematic model comparison and assessment, supporting both cross-model comparison on fixed datasets and cross-dataset generalisation analysis (ID and OOD), including:
 - **Global error analysis**: L2 and relative L2 metrics, distributions, CDFs, mean and standard-deviation error maps, and frequency-domain error spectra  
 - **Error decomposition**: error vs output magnitude and error vs distance to domain boundaries  
 - **Physical consistency checks**: velocity divergence, mass conservation error maps, pressure boundary-condition consistency, and full Darcy–Brinkman operator residual evaluation  
@@ -91,11 +91,11 @@ M[MATLAB<br/>Synthetic Data Generator<br/>batch_run.m]
 D1[(Parameter Metadata<br/>data_generation/data/meta/<br/>batch_name.json<br/>batch_name.csv)]
 D2[(Generator Outputs<br/>data_generation/data/raw/<br/>batch_name/<br/>case_XXXX.json<br/>case_XXXX.csv)]
 C[COMSOL Multiphysics<br/>Brinkman Flow Solver]
-D3[(Simulation Outputs<br/>data_generation/data/processed/<br/>batch_name/<br/>case_XXXX_sol.csv)]
+D3[(Simulation Outputs<br/>data_generation/data/processed/batch_name/<br/>case_XXXX_sol.csv)]
 P[Python Pipeline<br/>Dataset Construction<br/>Model Training & Evaluation]
-D4[(Case Dataset<br/>data/raw/<br/>batch_name/<br/>meta.pt<br/>/cases/case_XXXX.pt<br/>)]
-D5[(Training Dataset<br/>model_training/data/<br/>raw/batch_name/<br/>meta.pt<br/>batch_name.pt)]
-D6[(Model Artifacts<br/>model_training/data/processed/<br/>model_name/...)]
+D4[(Case Dataset<br/>data/raw/batch_name/<br/>meta.pt<br/>/cases/case_XXXX.pt<br/>)]
+D5[(Training Dataset<br/>model_training/data/raw/batch_name/<br/>meta.pt<br/>batch_name.pt)]
+D6[(Model Artifacts<br/>model_training/data/processed/model_name/...)]
 
 M --> D1
 M --> D2
@@ -161,7 +161,7 @@ subgraph DG[DATA GENERATION]
       C1 --> C2 --> C3
    end
 
-   D3[(Simulation Outputs<br/>data_generation/data/processed/<br/>batch_name/<br/>case_XXXX_sol.csv)]
+   D3[(Simulation Outputs<br/>data_generation/data/processed/batch_name/<br/>case_XXXX_sol.csv)]
 end
 
 M6 --> D2 --> M7 --> C1
@@ -177,11 +177,11 @@ subgraph MT[MODEL TRAINING]
 
         P2[*build_batch_dataset.py*<br/>Assemble fields, prune metadata,<br/>detect unused channels]
 
-        D4[(Case Dataset<br/>data/raw/<br/>batch_name/<br/>meta.pt<br/>/cases/case_XXXX.pt<br/>)]
+        D4[(Case Dataset<br/>data/raw/batch_name/<br/>meta.pt<br/>/cases/case_XXXX.pt<br/>)]
 
         P3[*merge_batch_cases.py*<br/>Select channels, stack tensors,<br/>build training dataset]
 
-        D5[(Training Dataset<br/>model_training/data/<br/>raw/batch_name/<br/>meta.pt<br/>batch_name.pt)]
+        D5[(Training Dataset<br/>model_training/data/raw/batch_name/<br/>meta.pt<br/>batch_name.pt)]
 
         E1[EDA *eda.ipynb*<br/>Case-level statistics + spectral sanity checks]
 
@@ -212,7 +212,7 @@ subgraph MT[MODEL TRAINING]
         TO2[*PINOLoss*<br/>Brinkman residual and data loss]
         T1[*train_base.py*<br/>Unified pipeline]
         T2[NeuralOP *Trainer*<br/>]
-        D6[(Model Artifacts<br/>model_training/data/processed/<br/>model_name/...)]
+        D6[(Model Artifacts<br/>model_training/data/processed/model_name/...)]
 
         %% -------------------------
         %% Data flow: training
@@ -299,114 +299,137 @@ Then open the URL shown in the terminal.
 ```bash
 .
 ├── .devcontainer/                                      # VS Code Dev Container configuration
-│   └── devcontainer.json                               # Container setup and environment definition
+│   └── devcontainer.json                               # Dev container setup and environment definition
 │
-├── data/                                               # Final trained modelss and batch training datasets
-│   ├── processed/                                      # Final trained models
-│   └── raw/                                            # COMSOL output and metadata for batch before preprocessing
-│       ├── samples_uniform_var10_N1000/                # Example batch of simulation cases
-│       │   ├── cases/                                  # Individual case files with (κ, p, U)
-│       │   └── meta.pt                                 # Batch generation parameters
-│       └── ...                                         
+├── data/                                               # Stored datasets and trained model artefacts
+│   ├── processed/                                      # Final trained model artefacts and evaluation-ready outputs
+│   └── raw/                                            # Raw simulation outputs and metadata before preprocessing
+│       ├── lhs_var80_seed3001/                         # Example simulation batch
+│       │   ├── cases/                                  # Individual simulation cases with κ, p, u, v
+│       │   └── meta.pt                                 # Batch-level generation metadata
+│       └── ...                                         # Additional raw simulation batches
 │
-├── data_generation/                                    # MATLAB → COMSOL → PyTorch data creation pipeline
-│   ├── comsol/                                         # COMSOL model templates for automated simulation
-│   │   ├── template_brinkman.mph                       # Base Brinkman model file
-│   │   ├── template_brinkman_cluster.mph               # Cluster version
-│   │   └── template_brinkman_tensor.mph                # Tensor variant for permeability field
+├── data_generation/                                    # MATLAB → COMSOL → PyTorch data generation pipeline
+│   ├── comsol/                                         # COMSOL templates for automated simulations
+│   │   └── template_brinkman.mph                       # Brinkman and Darcy-Brinkman COMSOL model template
 │   │
-│   ├── data/                                           # Generated datasets
-│   │   ├── meta/                                       # Metadata describing batch
-│   │   │   ├── samples_uniform_var10_N1000.csv         # Generation parameters for cases of batch
-│   │   │   ├── samples_uniform_var10_N1000.json        # Metadata for batch generation
-│   │   │   └── ...                                     
+│   ├── data/                                           # Generated dataset storage
+│   │   ├── meta/                                       # Metadata describing dataset batches
+│   │   │   ├── lhs_var80_seed3001.csv                  # Case-level generator parameters
+│   │   │   ├── lhs_var80_seed3001.json                 # Batch-level configuration metadata
+│   │   │   └── ...                                     # Metadata for additional batches
 │   │   │
-│   │   ├── processed/                                  # COMSOL outputs
-│   │   │   ├── samples_uniform_var10_N1000/            # Processed dataset directory
-│   │   │   │   ├── case_0001_sol.csv                   # Example processed field solution
-│   │   │   │   └── ...                                 
-│   │   │   └── ...                                     
+│   │   ├── processed/                                  # Processed COMSOL outputs
+│   │   │   ├── lhs_var80_seed3001/                     # Processed outputs for one batch
+│   │   │   │   ├── case_0001_sol.csv                   # Processed solution fields per case
+│   │   │   │   └── ...                                 # Additional processed cases
+│   │   │   └── ...                                     # Other processed batches
 │   │   │
-│   │   └── raw/                                        # MATLAB permability-field
-│   │       ├── samples_uniform_var10_N1000/            # Individual batch
-│   │       │   ├── case_0001.csv                       # Raw permeability field data
-│   │       │   ├── case_0001.json                      # Associated metadata for this case
-│   │       │   └── ...                                 
-│   │       └── ...                                     
+│   │   └── raw/                                        # Raw MATLAB-generated permeability fields
+│   │       ├── lhs_var80_seed3001/                     # Raw permeability batch
+│   │       │   ├── case_0001.csv                       # Raw permeability field κ(x)
+│   │       │   ├── case_0001.json                      # Case-specific generation metadata
+│   │       │   └── ...                                 # Additional raw cases
+│   │       └── ...                                     # Other raw batches
 │   │
-│   └── matlab/                                         # MATLAB scripts for permeability generation and COMSOL coupling
-│       ├── functions/                                  # Modularized MATLAB functions
-│       │   ├── core/                                   # Core utilities for data generation and visualization
-│       │   │   ├── gen_permeability.m                  # Generates synthetic permeability fields κ(x)
-│       │   │   ├── run_comsol_case.m                   # Executes a single COMSOL simulation case
-│       │   │   ├── sample_parameters.m                 # Creates randomized parameter sets for DoE
-│       │   │   └── visualize_case.m                    # Visualization helper for MATLAB/COMSOL outputs
+│   └── matlab/                                         # MATLAB scripts for field generation and COMSOL coupling
+│       ├── functions/                                  # Modular MATLAB function library
+│       │   ├── core/                                   # Core generation and simulation utilities
+│       │   │   ├── gen/                                # Low-level physical field generators
+│       │   │   │   ├── gen_export.m                    # Export routines for COMSOL and CSV files
+│       │   │   │   ├── gen_permeability_field.m        # Synthetic permeability field generator κ(x)
+│       │   │   │   ├── gen_porosity_field.m            # Porosity field generator
+│       │   │   │   ├── gen_pressure_bc.m               # Pressure boundary condition generator
+│       │   │   │   └── gen_structure_field.m           # Solid structure and obstacle field generator
+│       │   │   │
+│       │   │   ├── gen_permeability.m                  # High-level permeability generation wrapper
+│       │   │   ├── gen_simulation_inputs.m             # Assembly of COMSOL simulation inputs
+│       │   │   ├── run_comsol_case.m                   # Executes a single COMSOL simulation
+│       │   │   ├── sample_parameters.m                 # Design of experiments parameter sampling
+│       │   │   └── visualize_case.m                    # Visualisation of generated fields and results
 │       │   │
-│       │   └── test/                                   # MATLAB test routines for validation
-│       │       ├── test_generate_permeability_fields.m # Test for permeability generation
-│       │       ├── test_run_comsol_case.m              # Test for COMSOL automation routine
-│       │       └── test_visualize_case.m               # Test for visualization and output integrity
+│       │   └── test/                                   # MATLAB validation and regression tests
+│       │       ├── test_gen_simulation_inputs.m        # Tests for simulation input correctness
+│       │       ├── test_generate_permeability_fields.m # Tests for permeability generation correctness
+│       │       ├── test_run_comsol_case.m              # Tests for COMSOL automation
+│       │       └── test_visualize_case.m               # Tests for visualisation integrity
 │       │
-│       ├── batch_run.m                                 # Batch execution for full dataset generation
-│       ├── build_batch_dataset.py                      # Python converter for merging raw COMSOL outputs into .pt
-│       ├── merge_batch_cases.py                        # Combines multiple cases into unified datasets
-│       ├── permeability_field_viewer.mlx               # MATLAB Live Script for permeability-field inspection
-│       └── singel_run.m                                # Single test run for debugging and prototyping
-│   
-├── docs/                                               # Project documentation, plots, and figures
+│       ├── batch_run.m                                 # Full batch execution script
+│       ├── build_batch_dataset.py                      # Python converter from raw outputs to PyTorch tensors
+│       ├── merge_batch_cases.py                        # Merge individual cases into unified datasets
+│       ├── permeability_field_viewer.mlx               # MATLAB Live Script for permeability inspection
+│       └── singel_run.m                                # Single-case debug execution
 │
-├── model_training/                                     # Core training and analysis environment
-│   ├── data/                                           # Training datasets and model checkpoints
-│   │   ├── meta/                                       # 
-│   │   ├── processed/                                  # 
-│   │   └── raw/                                        # Merged datasets used as input
-│   │       ├── samples_uniform_var10_N1000/            # Example batch
-│   │       │   ├── meta.pt                             # Batch generation parameters
-│   │       │   └── samples_uniform_var10_N1000.pt      # Main training tensor data
-│   │       └── ...                                     
-│   │
-│   ├── notebooks/                                      # Interactive notebooks for analysis and visualization
-│   │   └── EDA.ipynb                                   # Exploratory Data Analysis for PINO input fields
-│   │
-│   ├── src/                                            
-│   │   ├── eda/                                        # Spectral and statistical analysis utilities
-│   │   │   ├── __init__.py                             
-│   │   │   └── eda_spectral_analysis.py                # Main EDA routines for PSD and field spectra
-│   │   │
-│   │   ├── model/                                      # 
-│   │   │   ├── __init__.py                             
-│   │   │   └── XXX.py                                  #
-│   │   │
-│   │   └── util/                                       # Shared helper functions
-│   │       ├── __init__.py                             
-│   │       ├── util_data.py                            # Data loading and preprocessing routines
-│   │       └── util_nb.py                              # Notebook utilities (visualization, widgets)
-│   │
-│   └── train_pino.py                                   # Main training entry script for PINO
+├── docs/                                               # Documentation, figures, plots, and reports
 │
-├── .dockerignore                                       # Docker build exclusion list
-├── .gitignore                                          # Git exclusion list
-├── Dockerfile                                          # Docker image setup for reproducible environment
-├── environment.yml                                     # Conda/Mamba environment specification
-├── pyproject.toml                                      # Poetry configuration for dependencies
-└── README.md                                           # Project overview and documentation
+├── src/                                                # Core Python source code
+│   ├── analysis/                                       # Model evaluation and analysis logic
+│   │   ├── evaluation/                                 # Evaluation-specific submodule
+│   │   │   ├── evaluation_plot/                        # Evaluation plotting routines
+│   │   │   │   ├── __init__.py                         # Evaluation plot module initialisation
+│   │   │   │   ├── evaluation_plot_error_decomposition.py   # Error decomposition plots
+│   │   │   │   ├── evaluation_plot_global_error_analysis.py # Global error statistics plots
+│   │   │   │   ├── evaluation_plot_outlier_analysis.py      # Outlier and extreme-case analysis
+│   │   │   │   ├── evaluation_plot_parameter_sensitivity.py # Sensitivity analysis vs generator parameters
+│   │   │   │   ├── evaluation_plot_physical_consistency.py  # Physical consistency checks
+│   │   │   │   └── evaluation_plot_sample_viewer.py         # Interactive sample viewer
+│   │   │   │
+│   │   │   ├── __init__.py                             # Evaluation module initialisation
+│   │   │   └── evaluation_dataframe.py                 # Central evaluation DataFrame construction
+│   │   │
+│   │   ├── __init__.py                                 # Analysis module initialisation
+│   │   ├── analysis_artifacts.py                       # Storage and handling of analysis artefacts
+│   │   └── analysis_interference.py                    # Analysis of model interference effects
+│   │
+│   ├── dataset/                                        # Dataset abstractions and loaders
+│   │   ├── dataset_module/                             # Dataset feature modules
+│   │   │   ├── __init__.py                             # Dataset module initialisation
+│   │   │   └── dataset_module_flow.py                  # Flow-specific dataset fields p, u, v, κ
+│   │   │
+│   │   ├── __init__.py                                 # Dataset module initialisation
+│   │   ├── dataset_base.py                             # Abstract dataset base class
+│   │   └── dataset_simulation.py                       # Simulation-based dataset implementation
+│   │
+│   ├── eda/                                            # Exploratory data analysis
+│   │   ├── eda_plot/                                   # EDA plotting utilities
+│   │   │   ├── __init__.py                             # EDA plot module initialisation
+│   │   │   ├── eda_plot_case_statistics.py             # Case-level statistical analysis plots
+│   │   │   └── eda_plot_spectral_analysis.py           # Spectral and PSD analysis plots
+│   │   │
+│   │   ├── __init__.py                                 # EDA module initialisation
+│   │   └── eda_dataframe.py                            # EDA-specific DataFrame preparation
+│   │
+│   └── util/                                           # Shared utility functions
+│       ├── __init__.py                                 # Utility module initialisation
+│       ├── util_metrics.py                             # Error and statistic metrics
+│       ├── util_nb.py                                  # Notebook helpers and widget utilities
+│       ├── util_plot.py                                # General plotting wrappers
+│       └── util_plot_components.py                     # Reusable plot components
+│
+├── training/                                           # Training entry points and training infrastructure
+│   ├── __pycache__/                                    # Python bytecode cache
+│   │
+│   ├── tools/                                          # Training-specific helper modules
+│   │   ├── __init__.py                                 # Training tools module initialisation
+│   │   ├── pino_loss.py                                # Physics-informed loss definitions
+│   │   └── spectral_hook.py                            # Spectral energy monitoring hooks
+│   │
+│   ├── wandb/                                          # Weights and Biases logging utilities or configs
+│   │
+│   ├── train_base.py                                   # Shared base training loop and utilities
+│   ├── train_fno.py                                    # Training entry point for classical FNO
+│   ├── train_pi_fno.py                                 # Training entry point for Physics-Informed FNO
+│   ├── train_pi_uno.py                                 # Training entry point for Physics-Informed UNO
+│   └── train_uno.py                                    # Training entry point for classical UNO
+│
+├── .dockerignore                                       # Docker build exclusion rules
+├── .gitignore                                          # Git exclusion rules
+├── Dockerfile                                          # Docker image definition
+├── environment.yml                                     # Conda and Mamba environment specification
+├── pyproject.toml                                      # Python project and dependency configuration
+└── README.md                                           # Project overview and usage documentation
 ```
 </details>
-
----
-
-## 🧠 Methodology
-
-1. **Data Generation (MATLAB + COMSOL)**  
-   Random κ fields are generated in MATLAB and solved for p and U in COMSOL (Brinkman flow).  
-2. **Data Preparation (Python)**  
-   Case files and metadata are merged into structured `.pt` datasets.  
-3. **Exploratory Data Analysis (EDA)**  
-   Statistical and spectral inspection of fields using Matplotlib and ipywidgets.  
-4. **Model Training (PINO)**  
-   Train a Fourier-based Physics-Informed Neural Operator to learn the mapping κ → (p, U).  
-5. **Evaluation and Diagnostics**  
-   Visualize residual loss, convergence curves, and spectral error maps.
 
 ---
 

@@ -8,7 +8,7 @@
 % Date:   2026-01-03
 % ============================================================
 
-function [fields, info] = gen_material_fields(Lx, Ly, res, seed, opts)
+function [fields, info] = gen_simulation_inputs(Lx, Ly, res, seed, opts)
 %% === Path setup =============================================
 this_dir = fileparts(mfilename('fullpath'));
 addpath(fullfile(this_dir, 'gen'));
@@ -52,7 +52,7 @@ info.geometry = struct( ...
 
 %% === 5) Export (CSV + JSON) =================================
 if opts.save
-    info.export = gen_export_fields(fields, info, opts);
+    info.export = gen_export(fields, info, opts);
 end
 
 end

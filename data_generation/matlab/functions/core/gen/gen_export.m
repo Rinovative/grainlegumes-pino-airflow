@@ -16,7 +16,7 @@
 % Date:   2026-01-04
 % ============================================================
 
-function info_export = gen_export_fields(fields, info, opts)
+function info_export = gen_export(fields, info, opts)
 
 arguments
     fields struct

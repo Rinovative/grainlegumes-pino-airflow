@@ -43,10 +43,10 @@ addpath(genpath(fullfile(project_root, 'matlab', 'functions')));
 save_model = false;
 
 % === SAMPLING PARAMETERS ===
-method     = 'lhs';       % 'uniform', 'lhs', or 'sobol'
+method     = 'sobol';       % 'uniform', 'lhs', or 'sobol'
 variation  = 0.8;         % relative parameter variation
 N          = 1000;        % number of samples
-seed       = 3001;        % reproducibility seed
+seed       = 13001;        % reproducibility seed
 
 batch_name = sprintf('%s_var%.0f_seed%.0f', ...
     method, variation*100, seed);
@@ -217,7 +217,7 @@ for i = 1:n_cases
 
     %% --- Step 1: Generate permeability field ---------------------------
     try
-        [fields, info] = gen_material_fields(Lx, Ly, res, seed_case, opts);
+        [fields, info] = gen_simulation_inputs(Lx, Ly, res, seed_case, opts);
         if debug
             fprintf('  → Fields exported: %s\n', info.export.paths.csv);
         end
