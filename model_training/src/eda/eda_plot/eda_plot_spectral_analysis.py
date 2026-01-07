@@ -47,7 +47,7 @@ def _infer_field_keys(df: pd.DataFrame) -> list[str]:
             continue
 
         arr = np.asarray(sample[col])
-        if arr.ndim == 2 and np.issubdtype(arr.dtype, np.number):
+        if arr.ndim == 2 and np.issubdtype(arr.dtype, np.number):  # noqa: PLR2004
             keys.append(col)
 
     return keys
@@ -261,7 +261,7 @@ def plot_spectral_overview(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox
         plot_func=_plot,
         datasets=datasets,
         start_idx=0,
-        enable_dataset_dropdown=False,
+        enable_dataset_dropdown=True,
     )
 
 
@@ -364,5 +364,5 @@ def plot_spectral_vertical(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox
         plot_func=_plot,
         datasets=datasets,
         start_idx=0,
-        enable_dataset_dropdown=False,
+        enable_dataset_dropdown=True,
     )

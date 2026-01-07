@@ -379,7 +379,7 @@ def plot_error_vs_boundary_distance(
             entry["loaded_until"] = max_cases
 
         # --------------------------------------------------------------
-        # BUILD BARPLOT (separate legend column, no shared axes)
+        # BUILD BARPLOT
         # --------------------------------------------------------------
         names = list(datasets.keys())
         n_data = len(names)

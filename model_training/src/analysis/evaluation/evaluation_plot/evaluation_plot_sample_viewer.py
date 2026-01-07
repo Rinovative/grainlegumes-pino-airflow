@@ -31,7 +31,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import matplotlib.pyplot as plt
-import matplotlib.ticker as mticker
 import numpy as np
 
 from src import util
@@ -39,7 +38,6 @@ from src import util
 if TYPE_CHECKING:
     import ipywidgets as widgets
     import pandas as pd
-    from matplotlib.axes import Axes
     from matplotlib.figure import Figure
 
 
@@ -136,201 +134,6 @@ def _aggregate_kappa(kappa: np.ndarray, names: list[str]) -> np.ndarray:
 
 
 # =============================================================================
-# LEVEL COMPUTATION
-# =============================================================================
-
-_MIN_LEVEL_COUNT = 2
-
-
-def _compute_levels(arr: np.ndarray, n: int = 10) -> np.ndarray:
-    """
-    Compute contour levels based on quantiles with rounding to two significant figures.
-
-    Parameters
-    ----------
-    arr : np.ndarray
-        Input array.
-    n : int
-        Number of levels.
-
-    Returns
-    -------
-    np.ndarray
-        Array of contour levels.
-
-    """
-    # Remove NaNs/Infs immediately
-    arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
-
-    # Raw quantile levels
-    raw = np.quantile(arr, np.linspace(0, 1, n))
-
-    vmin, vmax = float(arr.min()), float(arr.max())
-
-    # Constant field → return safe linear levels
-    if vmin == vmax:
-        eps = 1e-12
-        return np.linspace(vmin - eps, vmax + eps, n)
-
-    # Replace exact zeros before log10
-    raw_safe = np.where(raw == 0.0, 1e-30, raw)
-
-    # -------------------------------
-    # Round to two significant figures
-    # -------------------------------
-    x = raw_safe.astype(float)
-
-    with np.errstate(divide="ignore", invalid="ignore"):
-        exp = np.floor(np.log10(np.abs(x)))
-        scale = np.power(10.0, exp - 1)
-        rounded = np.round(x / scale) * scale
-
-    # Remove any NaNs produced by rounding
-    rounded = np.nan_to_num(rounded, nan=vmin, posinf=vmax, neginf=vmin)
-
-    # Remove duplicates
-    levels = np.unique(rounded)
-
-    # Too few levels → fallback to linear spacing
-    if len(levels) < _MIN_LEVEL_COUNT:
-        return np.linspace(vmin, vmax, n)
-
-    # Enforce monotonicity
-    if not np.all(np.diff(levels) > 0):
-        return np.linspace(levels[0], levels[-1], n)
-
-    return levels
-
-
-# =============================================================================
-# PLOTTING
-# =============================================================================
-
-
-def _apply_axis_labels(
-    ax: Axes,
-    _row: int,
-    col: int,
-    Lx: float,
-    Ly: float,
-    *,
-    is_last_row: bool,
-) -> None:
-    """
-    Apply consistent axis labels and enforce explicit y-ticks including 0.75.
-
-    Behaviour:
-        - Left column: show y-axis with ticks at [0, 0.25, 0.5, 0.75]
-        - Bottom row (dynamic): show x-axis
-        - All other axes: hide tick labels
-        - Axis limits always full domain
-    """
-    # ---- Limits ----
-    ax.set_xlim(0, Lx)
-    ax.set_ylim(0, Ly)
-
-    # ---- Y-AXIS ----
-    yticks = [0.0, 0.25, 0.5, 0.75]
-
-    if col == 0:
-        ax.set_yticks(yticks)
-        ax.set_ylabel("y [m]")
-        ax.tick_params(axis="y", labelleft=True)
-    else:
-        ax.set_yticks(yticks)
-        ax.tick_params(axis="y", labelleft=False)
-
-    # ---- X-AXIS ----
-    if is_last_row:
-        ax.set_xlabel("x [m]")
-        ax.tick_params(axis="x", labelbottom=True)
-    else:
-        ax.tick_params(axis="x", labelbottom=False)
-
-
-def _choose_colorbar_formatter(vmin: float, vmax: float) -> mticker.Formatter:
-    """
-    Choose a colorbar formatter based on value range.
-
-    Parameters
-    ----------
-    vmin : float
-        Minimum value.
-    vmax : float
-        Maximum value.
-
-    Returns
-    -------
-    matplotlib.ticker.Formatter
-        Appropriate formatter instance.
-
-    """
-    vr = max(abs(vmin), abs(vmax))
-
-    # Very small values → scientific notation
-    if vr < 1e-3:  # noqa: PLR2004
-        return mticker.FormatStrFormatter("%.2e")
-
-    # Small values < 0.1 → 4 decimals
-    if vr < 0.1:  # noqa: PLR2004
-        return mticker.FormatStrFormatter("%.4f")
-
-    # Medium values < 1 → 3 decimals
-    if vr < 1:
-        return mticker.FormatStrFormatter("%.2f")
-
-    # Normal values < 100 → 2 decimals
-    if vr < 100:  # noqa: PLR2004
-        return mticker.FormatStrFormatter("%.2f")
-
-    # Large values → no decimals
-    return mticker.FormatStrFormatter("%.0f")
-
-
-def _overlay_streamlines(
-    ax: Axes,
-    X: np.ndarray,
-    Y: np.ndarray,
-    u: np.ndarray,
-    v: np.ndarray,
-) -> None:
-    """
-    Overlay streamlines on a given axis.
-
-    Parameters
-    ----------
-    ax : matplotlib.axes.Axes
-        Axis to plot on.
-    X : np.ndarray
-        Meshgrid X coordinates.
-    Y : np.ndarray
-        Meshgrid Y coordinates.
-    u : np.ndarray
-        Velocity field in x-direction.
-    v : np.ndarray
-        Velocity field in y-direction.
-
-    Returns
-    -------
-    None
-        Plots streamlines directly on the provided axis.
-
-    """
-    ax.streamplot(
-        X,
-        Y,
-        u,
-        v,
-        color=(0, 0, 0, 0.6),
-        density=1.0,
-        linewidth=0.6,
-        arrowsize=0.6,
-        minlength=0.1,
-        integration_direction="both",
-    )
-
-
-# =============================================================================
 # Viewer: 4x4 Prediction/GT/Error/Kappa
 # =============================================================================
 
@@ -409,10 +212,10 @@ def plot_sample_prediction_overview(*, datasets: dict[str, pd.DataFrame]) -> wid
 
         # ---- Kappa fields ----
         kappa_field = _aggregate_kappa(kappa, kappa_names)
-        kappa_levels = _compute_levels(kappa_field, n_levels)
+        kappa_levels = util.util_plot_components.compute_levels(kappa_field, n_levels)
 
         kappa_log_field = np.log10(np.maximum(kappa_field, 1e-30))
-        kappa_log_levels = _compute_levels(kappa_log_field, n_levels)
+        kappa_log_levels = util.util_plot_components.compute_levels(kappa_log_field, n_levels)
 
         nrows = 4  # fixed layout
 
@@ -427,16 +230,16 @@ def plot_sample_prediction_overview(*, datasets: dict[str, pd.DataFrame]) -> wid
                 X,
                 Y,
                 pred[r],
-                levels=_compute_levels(pred[r], n_levels),
+                levels=util.util_plot_components.compute_levels(pred[r], n_levels),
                 cmap=cmap_pred_true,
             )
             if label in {"u", "v", "U"}:
-                _overlay_streamlines(ax, X, Y, pred[1], pred[2])
+                util.util_plot_components.overlay_streamlines(ax, X, Y, pred[1], pred[2])
 
             ax.set_title(f"{label} pred [{unit_map[label]}]")
             cb = fig.colorbar(im, ax=ax, fraction=0.04)
-            cb.ax.yaxis.set_major_formatter(_choose_colorbar_formatter(*im.get_clim()))
-            _apply_axis_labels(ax, r, 0, Lx, Ly, is_last_row=is_last_row)
+            cb.ax.yaxis.set_major_formatter(util.util_plot_components.choose_colorbar_formatter(*im.get_clim()))
+            util.util_plot_components.apply_axis_labels(ax, 0, Lx, Ly, is_last_row=is_last_row)
 
             # -------------------------------------------------
             # Ground truth
@@ -446,16 +249,16 @@ def plot_sample_prediction_overview(*, datasets: dict[str, pd.DataFrame]) -> wid
                 X,
                 Y,
                 gt[r],
-                levels=_compute_levels(gt[r], n_levels),
+                levels=util.util_plot_components.compute_levels(gt[r], n_levels),
                 cmap=cmap_pred_true,
             )
             if label in {"u", "v", "U"}:
-                _overlay_streamlines(ax, X, Y, gt[1], gt[2])
+                util.util_plot_components.overlay_streamlines(ax, X, Y, gt[1], gt[2])
 
             ax.set_title(f"{label} true [{unit_map[label]}]")
             cb = fig.colorbar(im, ax=ax, fraction=0.04)
-            cb.ax.yaxis.set_major_formatter(_choose_colorbar_formatter(*im.get_clim()))
-            _apply_axis_labels(ax, r, 1, Lx, Ly, is_last_row=is_last_row)
+            cb.ax.yaxis.set_major_formatter(util.util_plot_components.choose_colorbar_formatter(*im.get_clim()))
+            util.util_plot_components.apply_axis_labels(ax, 1, Lx, Ly, is_last_row=is_last_row)
 
             # -------------------------------------------------
             # Error
@@ -477,8 +280,8 @@ def plot_sample_prediction_overview(*, datasets: dict[str, pd.DataFrame]) -> wid
             im = ax.contourf(X, Y, err_field, levels=levels_err, cmap=cmap_error)
             ax.set_title(err_title)
             cb = fig.colorbar(im, ax=ax, fraction=0.04)
-            cb.ax.yaxis.set_major_formatter(_choose_colorbar_formatter(*im.get_clim()))
-            _apply_axis_labels(ax, r, 2, Lx, Ly, is_last_row=is_last_row)
+            cb.ax.yaxis.set_major_formatter(util.util_plot_components.choose_colorbar_formatter(*im.get_clim()))
+            util.util_plot_components.apply_axis_labels(ax, 2, Lx, Ly, is_last_row=is_last_row)
 
             # -------------------------------------------------
             # Kappa panels
@@ -488,7 +291,7 @@ def plot_sample_prediction_overview(*, datasets: dict[str, pd.DataFrame]) -> wid
                 im = ax.contourf(X, Y, kappa_field, levels=kappa_levels, cmap=cmap_kappa)
                 ax.set_title("kappa [m²]")
                 fig.colorbar(im, ax=ax, fraction=0.04)
-                _apply_axis_labels(ax, r, 3, Lx, Ly, is_last_row=is_last_row)
+                util.util_plot_components.apply_axis_labels(ax, 3, Lx, Ly, is_last_row=is_last_row)
 
             elif r == 1:
                 im = ax.contourf(
@@ -500,7 +303,7 @@ def plot_sample_prediction_overview(*, datasets: dict[str, pd.DataFrame]) -> wid
                 )
                 ax.set_title("log10(kappa) [m²]")
                 fig.colorbar(im, ax=ax, fraction=0.04)
-                _apply_axis_labels(ax, r, 3, Lx, Ly, is_last_row=is_last_row)
+                util.util_plot_components.apply_axis_labels(ax, 3, Lx, Ly, is_last_row=is_last_row)
 
             else:
                 ax.axis("off")
@@ -674,7 +477,7 @@ def plot_sample_kappa_tensor_with_overlay(*, datasets: dict[str, pd.DataFrame]) 
         # --------------------------------------------------
         # Levels
         # --------------------------------------------------
-        kappa_levels = _compute_levels(
+        kappa_levels = util.util_plot_components.compute_levels(
             np.concatenate([c.ravel() for _, c in comps]),
             n_kappa_levels,
         )
@@ -713,9 +516,8 @@ def plot_sample_kappa_tensor_with_overlay(*, datasets: dict[str, pd.DataFrame]) 
 
             ax.set_title(f"{name} [{kappa_unit}]")
 
-            _apply_axis_labels(
+            util.util_plot_components.apply_axis_labels(
                 ax,
-                r,
                 c,
                 Lx,
                 Ly,
@@ -723,14 +525,14 @@ def plot_sample_kappa_tensor_with_overlay(*, datasets: dict[str, pd.DataFrame]) 
             )
 
             cb = fig.colorbar(im, ax=ax, fraction=0.045)
-            formatter = _choose_colorbar_formatter(*im.get_clim())
+            formatter = util.util_plot_components.choose_colorbar_formatter(*im.get_clim())
             cb.ax.yaxis.set_major_formatter(formatter)
 
         # --------------------------------------------------
         # Right column: channel GT + error contours
         # --------------------------------------------------
         ax_gt = axes[0, -1]
-        gt_levels = _compute_levels(gt[channel_idx], n_kappa_levels)
+        gt_levels = util.util_plot_components.compute_levels(gt[channel_idx], n_kappa_levels)
 
         im = ax_gt.contourf(
             X,
@@ -753,12 +555,11 @@ def plot_sample_kappa_tensor_with_overlay(*, datasets: dict[str, pd.DataFrame]) 
         ax_gt.set_title(f"{channel_name} true [{unit_map[channel_name]}]")
 
         cb = fig.colorbar(im, ax=ax_gt, fraction=0.045)
-        formatter = _choose_colorbar_formatter(*im.get_clim())
+        formatter = util.util_plot_components.choose_colorbar_formatter(*im.get_clim())
         cb.ax.yaxis.set_major_formatter(formatter)
 
-        _apply_axis_labels(
+        util.util_plot_components.apply_axis_labels(
             ax_gt,
-            0,
             ncols,
             Lx,
             Ly,
@@ -775,7 +576,7 @@ def plot_sample_kappa_tensor_with_overlay(*, datasets: dict[str, pd.DataFrame]) 
                 X,
                 Y,
                 err_field,
-                levels=err_levels if len(err_levels) > 0 else _compute_levels(err_field),
+                levels=err_levels if len(err_levels) > 0 else util.util_plot_components.compute_levels(err_field),
                 cmap=cmap_error,
             )
 
@@ -783,12 +584,11 @@ def plot_sample_kappa_tensor_with_overlay(*, datasets: dict[str, pd.DataFrame]) 
             ax_err.set_title(f"{channel_name} error [{unit}]")
 
             cb = fig.colorbar(im, ax=ax_err, fraction=0.045)
-            formatter = _choose_colorbar_formatter(*im.get_clim())
+            formatter = util.util_plot_components.choose_colorbar_formatter(*im.get_clim())
             cb.ax.yaxis.set_major_formatter(formatter)
 
-            _apply_axis_labels(
+            util.util_plot_components.apply_axis_labels(
                 ax_err,
-                1,
                 ncols,
                 Lx,
                 Ly,

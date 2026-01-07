@@ -50,6 +50,9 @@ ignore = [
   "D203",  # No blank line before class (conflicts with D211)
   "D212",  # Summary line position (conflicts with D213)
 
+  # 📦 Import conventions
+  "INP001",  # Implicit namespace package (src-layout)
+
   # intentional ignores
   "ANN401",  # Typing Any
   "FBT001", "FBT002", "FBT003",  # Boolean positional arguments

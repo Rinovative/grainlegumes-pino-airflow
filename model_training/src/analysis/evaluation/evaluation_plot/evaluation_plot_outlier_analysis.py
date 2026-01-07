@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, Any
 
 import ipywidgets as widgets
 import matplotlib.pyplot as plt
-import matplotlib.ticker as mticker
 import numpy as np
 import pandas as pd
 from IPython.display import Markdown, display
@@ -20,7 +19,6 @@ from matplotlib import cm
 from src import util
 
 if TYPE_CHECKING:
-    from matplotlib.axes import Axes
     from matplotlib.figure import Figure
 
 # =============================================================================
@@ -284,171 +282,6 @@ def _aggregate_kappa(kappa: np.ndarray, names: list[str]) -> np.ndarray:
 
 
 # =============================================================================
-# LEVELS / FORMATTERS
-# =============================================================================
-
-
-_MIN_LEVEL_COUNT = 2
-
-
-def _compute_levels(arr: np.ndarray, n: int = N_LEVELS) -> np.ndarray:
-    """
-    Compute contour levels for the given array.
-
-    Parameters
-    ----------
-    arr : np.ndarray
-        Input array.
-    n : int
-        Number of levels to compute.
-
-    Returns
-    -------
-        np.ndarray
-            Array of contour levels.
-
-    """
-    arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
-
-    raw = np.quantile(arr, np.linspace(0, 1, n))
-    vmin, vmax = float(arr.min()), float(arr.max())
-
-    if vmin == vmax:
-        eps = 1e-12
-        return np.linspace(vmin - eps, vmax + eps, n)
-
-    raw_safe = np.where(raw == 0.0, 1e-30, raw)
-    x = raw_safe.astype(float)
-
-    with np.errstate(divide="ignore", invalid="ignore"):
-        exp = np.floor(np.log10(np.abs(x)))
-        scale = np.power(10.0, exp - 1)
-        rounded = np.round(x / scale) * scale
-
-    rounded = np.nan_to_num(rounded, nan=vmin, posinf=vmax, neginf=vmin)
-    levels = np.unique(rounded)
-
-    if len(levels) < _MIN_LEVEL_COUNT:
-        return np.linspace(vmin, vmax, n)
-
-    if not np.all(np.diff(levels) > 0):
-        return np.linspace(levels[0], levels[-1], n)
-
-    return levels
-
-
-def _choose_colorbar_formatter(vmin: float, vmax: float) -> mticker.Formatter:
-    """
-    Choose an appropriate colorbar formatter based on the value range.
-
-    Parameters
-    ----------
-    vmin : float
-        Minimum value of the colorbar.
-    vmax : float
-        Maximum value of the colorbar.
-
-    Returns
-    -------
-        mticker.Formatter
-            The chosen formatter.
-
-    """
-    vr = max(abs(vmin), abs(vmax))
-    if vr < 1e-3:  # noqa: PLR2004
-        return mticker.FormatStrFormatter("%.2e")
-    if vr < 0.1:  # noqa: PLR2004
-        return mticker.FormatStrFormatter("%.4f")
-    if vr < 1:
-        return mticker.FormatStrFormatter("%.2f")
-    if vr < 100:  # noqa: PLR2004
-        return mticker.FormatStrFormatter("%.2f")
-    return mticker.FormatStrFormatter("%.0f")
-
-
-# =============================================================================
-# AXES / STREAMLINES
-# =============================================================================
-
-
-def _apply_axis_labels(ax: Axes, col: int, Lx: float, Ly: float, *, is_last_row: bool) -> None:
-    """
-    Apply axis labels and ticks to the given Axes.
-
-    Parameters
-    ----------
-    ax : Axes
-        The Axes to modify.
-    col : int
-        The column index of the subplot.
-    Lx : float
-        The length of the x-axis.
-    Ly : float
-        The length of the y-axis.
-    is_last_row : bool
-        Whether the subplot is in the last row.
-
-    Returns
-    -------
-        None
-
-    """
-    ax.set_xlim(0, Lx)
-    ax.set_ylim(0, Ly)
-
-    yticks = [0.0, 0.25, 0.5, 0.75]
-    ax.set_yticks(yticks)
-
-    if col == 0:
-        ax.set_ylabel("y [m]")
-        ax.tick_params(axis="y", labelleft=True)
-    else:
-        ax.tick_params(axis="y", labelleft=False)
-
-    if is_last_row:
-        ax.set_xlabel("x [m]")
-        ax.tick_params(axis="x", labelbottom=True)
-    else:
-        ax.tick_params(axis="x", labelbottom=False)
-
-
-def _overlay_streamlines(ax: Axes, X: np.ndarray, Y: np.ndarray, u: np.ndarray, v: np.ndarray) -> None:
-    """
-    Overlay streamlines on the given Axes.
-
-    Parameters
-    ----------
-    ax : Axes
-        The Axes to modify.
-    X : np.ndarray
-        The X grid.
-    Y : np.ndarray
-        The Y grid.
-    u : np.ndarray
-        The u velocity component.
-    v : np.ndarray
-        The v velocity component.
-
-    Returns
-    -------
-        None
-
-    """
-    ax.streamplot(
-        X,
-        Y,
-        u,
-        v,
-        color=(0, 0, 0, 0.6),
-        density=1.0,
-        linewidth=0.6,
-        arrowsize=0.6,
-        minlength=0.1,
-        integration_direction="both",
-    )
-
-
-# =============================================================================
 # SHARED 4x4 PLOT KERNEL
 # =============================================================================
 
@@ -490,10 +323,10 @@ def _plot_prediction_overview_case(
     fig, axes = plt.subplots(4, 4, figsize=(20, 9))
 
     kappa_field = _aggregate_kappa(kappa, kappa_names)
-    kappa_levels = _compute_levels(kappa_field, N_LEVELS)
+    kappa_levels = util.util_plot_components.compute_levels(kappa_field, N_LEVELS)
 
     kappa_log_field = np.log10(np.maximum(kappa_field, 1e-30))
-    kappa_log_levels = _compute_levels(kappa_log_field, N_LEVELS)
+    kappa_log_levels = util.util_plot_components.compute_levels(kappa_log_field, N_LEVELS)
 
     nrows = 4  # fixed layout
 
@@ -502,23 +335,23 @@ def _plot_prediction_overview_case(
 
         # Prediction
         ax = axes[r, 0]
-        im = ax.contourf(X, Y, pred[r], levels=_compute_levels(pred[r]), cmap="turbo")
+        im = ax.contourf(X, Y, pred[r], levels=util.util_plot_components.compute_levels(pred[r]), cmap="turbo")
         if ch in {"u", "v", "U"}:
-            _overlay_streamlines(ax, X, Y, pred[1], pred[2])
+            util.util_plot_components.overlay_streamlines(ax, X, Y, pred[1], pred[2])
         ax.set_title(f"{ch} pred [{UNIT_MAP[ch]}]")
         cb = fig.colorbar(im, ax=ax, fraction=0.04)
-        cb.ax.yaxis.set_major_formatter(_choose_colorbar_formatter(*im.get_clim()))
-        _apply_axis_labels(ax, 0, Lx, Ly, is_last_row=is_last)
+        cb.ax.yaxis.set_major_formatter(util.util_plot_components.choose_colorbar_formatter(*im.get_clim()))
+        util.util_plot_components.apply_axis_labels(ax, 0, Lx, Ly, is_last_row=is_last)
 
         # Ground truth
         ax = axes[r, 1]
-        im = ax.contourf(X, Y, gt[r], levels=_compute_levels(gt[r]), cmap="turbo")
+        im = ax.contourf(X, Y, gt[r], levels=util.util_plot_components.compute_levels(gt[r]), cmap="turbo")
         if ch in {"u", "v", "U"}:
-            _overlay_streamlines(ax, X, Y, gt[1], gt[2])
+            util.util_plot_components.overlay_streamlines(ax, X, Y, gt[1], gt[2])
         ax.set_title(f"{ch} true [{UNIT_MAP[ch]}]")
         cb = fig.colorbar(im, ax=ax, fraction=0.04)
-        cb.ax.yaxis.set_major_formatter(_choose_colorbar_formatter(*im.get_clim()))
-        _apply_axis_labels(ax, 1, Lx, Ly, is_last_row=is_last)
+        cb.ax.yaxis.set_major_formatter(util.util_plot_components.choose_colorbar_formatter(*im.get_clim()))
+        util.util_plot_components.apply_axis_labels(ax, 1, Lx, Ly, is_last_row=is_last)
 
         # Error
         ax = axes[r, 2]
@@ -546,8 +379,8 @@ def _plot_prediction_overview_case(
         im = ax.contourf(X, Y, field, levels=levels, cmap="Blues")
         ax.set_title(title)
         cb = fig.colorbar(im, ax=ax, fraction=0.04)
-        cb.ax.yaxis.set_major_formatter(_choose_colorbar_formatter(*im.get_clim()))
-        _apply_axis_labels(ax, 2, Lx, Ly, is_last_row=is_last)
+        cb.ax.yaxis.set_major_formatter(util.util_plot_components.choose_colorbar_formatter(*im.get_clim()))
+        util.util_plot_components.apply_axis_labels(ax, 2, Lx, Ly, is_last_row=is_last)
 
         # Kappa
         ax = axes[r, 3]
@@ -576,7 +409,7 @@ def _plot_prediction_overview_case(
 
         # HIER:
         fig.colorbar(im, ax=ax, fraction=0.04)
-        _apply_axis_labels(ax, 3, Lx, Ly, is_last_row=is_last)
+        util.util_plot_components.apply_axis_labels(ax, 3, Lx, Ly, is_last_row=is_last)
 
     fig.suptitle(f"{dataset_name} — {case_label}", fontsize=14)
     fig.tight_layout()

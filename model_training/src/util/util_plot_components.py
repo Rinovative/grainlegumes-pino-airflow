@@ -7,9 +7,14 @@ used by higher-level navigator functions in util_plot.py.
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 import ipywidgets as widgets
+import matplotlib.ticker as mticker
+import numpy as np
+
+if TYPE_CHECKING:
+    from matplotlib.axes import Axes
 
 # =============================================================================
 # TYPE CONTRACTS
@@ -588,3 +593,186 @@ def ui_output_plot() -> widgets.Output:
 
     """
     return widgets.Output()
+
+
+# =============================================================================
+# PLOTTING UTILITIES
+# =============================================================================
+
+# COLORBAR FORMATTERS
+
+
+def choose_colorbar_formatter(vmin: float, vmax: float) -> mticker.Formatter:
+    """
+    Choose an appropriate colorbar formatter based on value range.
+
+    Parameters
+    ----------
+    vmin : float
+        Minimum colorbar value.
+    vmax : float
+        Maximum colorbar value.
+
+    Returns
+    -------
+    matplotlib.ticker.Formatter
+        Formatter instance.
+
+    """
+    vr = max(abs(vmin), abs(vmax))
+
+    if vr < 1e-3:  # noqa: PLR2004
+        return mticker.FormatStrFormatter("%.2e")
+
+    if vr < 0.1:  # noqa: PLR2004
+        return mticker.FormatStrFormatter("%.4f")
+
+    if vr < 1:
+        return mticker.FormatStrFormatter("%.2f")
+
+    if vr < 100:  # noqa: PLR2004
+        return mticker.FormatStrFormatter("%.2f")
+
+    return mticker.FormatStrFormatter("%.0f")
+
+
+# CONTOUR LEVELS
+
+
+_MIN_LEVEL_COUNT = 2
+
+
+def compute_levels(arr: np.ndarray, n: int = 10) -> np.ndarray:
+    """
+    Compute robust contour levels using quantiles and rounding.
+
+    Parameters
+    ----------
+    arr : np.ndarray
+        Input array.
+    n : int
+        Number of levels.
+
+    Returns
+    -------
+    np.ndarray
+        Contour levels.
+
+    """
+    arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+
+    raw = np.quantile(arr, np.linspace(0, 1, n))
+    vmin, vmax = float(arr.min()), float(arr.max())
+
+    if vmin == vmax:
+        eps = 1e-12
+        return np.linspace(vmin - eps, vmax + eps, n)
+
+    raw_safe = np.where(raw == 0.0, 1e-30, raw)
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        exp = np.floor(np.log10(np.abs(raw_safe)))
+        scale = np.power(10.0, exp - 1)
+        rounded = np.round(raw_safe / scale) * scale
+
+    levels = np.unique(np.nan_to_num(rounded, nan=vmin))
+
+    if len(levels) < _MIN_LEVEL_COUNT:
+        return np.linspace(vmin, vmax, n)
+
+    if not np.all(np.diff(levels) > 0):
+        return np.linspace(levels[0], levels[-1], n)
+
+    return levels
+
+
+# AXIS LABEL HELPERS
+
+
+def apply_axis_labels(
+    ax: Axes,
+    col: int,
+    Lx: float,
+    Ly: float,
+    *,
+    is_last_row: bool,
+) -> None:
+    """
+    Apply consistent axis labels and ticks to subplot axes.
+
+    Parameters
+    ----------
+    ax : Axes
+        Matplotlib Axes to modify.
+    col : int
+        Column index of the subplot.
+    Lx : float
+        Length of the domain in x-direction.
+    Ly : float
+        Length of the domain in y-direction.
+    is_last_row : bool
+        Whether the subplot is in the last row.
+
+    Returns
+    -------
+    None
+        Modifies the Axes in place.
+
+    """
+    ax.set_xlim(0, Lx)
+    ax.set_ylim(0, Ly)
+
+    yticks = [0.0, 0.25, 0.5, 0.75]
+    ax.set_yticks(yticks)
+
+    if col == 0:
+        ax.set_ylabel("y [m]")
+        ax.tick_params(axis="y", labelleft=True)
+    else:
+        ax.tick_params(axis="y", labelleft=False)
+
+    if is_last_row:
+        ax.set_xlabel("x [m]")
+        ax.tick_params(axis="x", labelbottom=True)
+    else:
+        ax.tick_params(axis="x", labelbottom=False)
+
+
+# FLOW OVERLAYS
+
+
+def overlay_streamlines(ax: Axes, X: np.ndarray, Y: np.ndarray, u: np.ndarray, v: np.ndarray) -> None:
+    """
+    Overlay streamlines on the given Axes.
+
+    Parameters
+    ----------
+    ax : Axes
+        Matplotlib Axes to modify.
+    X : np.ndarray
+        X-coordinates meshgrid.
+    Y : np.ndarray
+        Y-coordinates meshgrid.
+    u : np.ndarray
+        Velocity component in x-direction.
+    v : np.ndarray
+        Velocity component in y-direction.
+
+    Returns
+    -------
+    None
+        Modifies the Axes in place.
+
+    """
+    ax.streamplot(
+        X,
+        Y,
+        u,
+        v,
+        color=(0, 0, 0, 0.6),
+        density=1.0,
+        linewidth=0.6,
+        arrowsize=0.6,
+        minlength=0.1,
+        integration_direction="both",
+    )

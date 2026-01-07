@@ -23,7 +23,7 @@ Values are zero everywhere except on the prescribed boundary.
 This encoding is intentional to keep a purely field-based PINO input.
 ===============================================================================
 
-"""  # noqa: D205, INP001
+"""  # noqa: D205
 
 import json
 from pathlib import Path
@@ -424,6 +424,6 @@ def build_batch_dataset(batch_name: str, verbose: bool = False) -> dict:  # noqa
 
 
 if __name__ == "__main__":
-    result = build_batch_dataset("lhs_var80_seed3001", verbose=True)
+    result = build_batch_dataset("lhs_var120_seed4001", verbose=True)
     for line in result["log"]:
         print(line)

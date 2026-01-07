@@ -25,7 +25,7 @@ This script:
     4. Saves a single <batch_name>.pt dataset for model_training.
     5. Copies meta.pt into the dataset folder if available.
 ===============================================================================
-"""  # noqa: D205, INP001
+"""  # noqa: D205
 
 import shutil
 from pathlib import Path
