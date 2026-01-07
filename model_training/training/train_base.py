@@ -1,4 +1,12 @@
-import inspect  # noqa: D100, INP001
+"""
+Model training pipeline with dataset creation, trainer setup, and logging.
+
+This module defines the `train_base` function which orchestrates the entire
+model training process, including dataset loading, dataloader creation,
+trainer setup, checkpointing, and logging with wandb.
+"""
+
+import inspect
 import json
 import os
 import random
@@ -21,8 +29,14 @@ def set_seed(seed: int = 9) -> None:
     """
     Set all random seeds for reproducibility.
 
-    Args:
-        seed (int): Seed value used for numpy, random and torch initialisation.
+    Parameters
+    ----------
+    seed : int
+        Seed value to set.
+
+    Returns
+    -------
+    None
 
     """
     random.seed(seed)
@@ -37,11 +51,15 @@ def extract_init_params(obj: Any) -> dict[str, Any]:
     """
     Extract initialisation parameters of an object for logging.
 
-    Args:
-        obj (Any): Model, optimizer or scheduler instance.
+    Parameters
+    ----------
+    obj : Any
+        Object instance to extract parameters from.
 
-    Returns:
-        Dict[str, Any]: Mapping of parameter names to their current values.
+    Returns
+    -------
+    dict[str, Any]
+        Dictionary of initialisation parameters and their values.
 
     """
     try:
@@ -67,11 +85,15 @@ def make_json_safe(obj: Any) -> Any:
     """
     Convert arbitrary Python objects into JSON serialisable structures.
 
-    Args:
-        obj (Any): Input object of any type.
+    Parameters
+    ----------
+    obj : Any
+        Input object to convert.
 
-    Returns:
-        Any: JSON compatible version of the object.
+    Returns
+    -------
+    Any
+        JSON serialisable representation of the input object.
 
     """
     if isinstance(obj, (str, int, float, bool)) or obj is None:
@@ -97,16 +119,25 @@ def build_wandb_config(
     """
     Build a wandb configuration dictionary for logging.
 
-    Args:
-        CONFIG (Mapping[str, Any]): Global configuration.
-        model (Any): Model instance.
-        optimizer (Any): Optimizer instance.
-        scheduler (Optional[Any]): Scheduler instance or None.
-        train_loss (Optional[Any]): Training loss function.
-        eval_losses (Mapping[str, Any]): Mapping of evaluation loss names to functions.
+    Parameters
+    ----------
+    CONFIG : Mapping[str, Any]
+        Global configuration dictionary.
+    model : Any
+        Neural operator model instance.
+    optimizer : Any
+        Initialised optimizer.
+    scheduler : Any | None
+        Scheduler instance or None.
+    train_loss : Any | None
+        Training loss function.
+    eval_losses : Mapping[str, Any]
+        Evaluation losses.
 
-    Returns:
-        Dict[str, Any]: Structured configuration tree for wandb.
+    Returns
+    -------
+    dict[str, Any]
+        Wandb configuration dictionary.
 
     """
     return {
@@ -153,6 +184,7 @@ def train_base(
     scheduler: Any | None = None,
     train_loss: Any | None = None,
     eval_losses: dict[str, Any] | None = None,
+    spectral_hook: Any | None = None,
 ) -> None:
     """
     Execute the complete model training pipeline.
@@ -165,16 +197,26 @@ def train_base(
     - Checkpoint handling
     - wandb logging
 
-    Args:
-        CONFIG (dict): Global configuration dictionary.
-        model: Neural operator model instance.
-        optimizer: Initialised optimizer.
-        scheduler: Scheduler instance or None.
-        train_loss: Training loss function.
-        eval_losses (dict): Evaluation losses.
+    Parameters
+    ----------
+    CONFIG : dict[str, Any]
+        Global configuration dictionary.
+    model : Any
+        Neural operator model instance.
+    optimizer : Any
+        Initialised optimizer.
+    scheduler : Any | None
+        Scheduler instance or None.
+    train_loss : Any | None
+        Training loss function.
+    eval_losses : dict[str, Any] | None
+        Evaluation losses.
+    spectral_hook : Any | None
+        Spectral energy hook for spectral diagnostics.
 
-    Returns:
-        None
+    Returns
+    -------
+    None
 
     """
     set_seed(CONFIG["seed"])
@@ -207,16 +249,19 @@ def train_base(
             msg = f"resume_from_dir not found: {resume_from}"
             raise FileNotFoundError(msg)
 
-        print(f"Resuming from checkpoint: {resume_from}")
+        print(f"[RUN] Resuming from checkpoint: {resume_from}")
 
         run_name = resume_from.name
         save_dir = resume_from
 
     else:
         timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-        run_name = f"{CONFIG['model_name']}_{CONFIG['train_dataset_name']}_{timestamp}"
-        save_dir = base / run_name
+        # W&B / semantic name
+        run_name = f"{CONFIG['model_name']}_{CONFIG['train_dataset_name']}"
+        # Local save directory
+        save_dir = base / f"{run_name}_{timestamp}"
         save_dir.mkdir(parents=True, exist_ok=True)
+        print(f"[RUN] {run_name} → {save_dir}")
 
     # ------------------------------------------------------------
     # W&B Setup
@@ -265,7 +310,6 @@ def train_base(
     # Save normalizer for inference
     normalizer_path = save_dir / "normalizer.pt"
     torch.save(data_processor.state_dict(), normalizer_path)
-    print(f"Saved normalizer to {normalizer_path}")
 
     # ------------------------------------------------------------
     # Trainer Setup
@@ -312,5 +356,14 @@ def train_base(
             resume_from_dir=str(resume_from),
         )
 
+    # ------------------------------------------------------------
+    # Spectral diagnostics save
+    # ------------------------------------------------------------
+    if spectral_hook is not None:
+        spectral_agg = spectral_hook.aggregate()
+        torch.save(spectral_agg, save_dir / "spectral_energy_aggregated.pt")
+
+    # ------------------------------------------------------------
+    # Finish
+    # ------------------------------------------------------------
     wandb.finish()
-    print("Training complete.")

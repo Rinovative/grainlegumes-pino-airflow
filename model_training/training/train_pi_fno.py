@@ -1,7 +1,7 @@
 """
-Model training script for Fourier Neural Operator (FNO).
+Model training script for Physiks-Informed Fourier Neural Operator (PI-FNO).
 
-This script sets up the FNO model, optimizer, scheduler, loss functions,
+This script sets up the FNO model, optimizer, scheduler, physiks-informed loss functions,
 and launches the training process using the base training function.
 """
 
@@ -12,6 +12,7 @@ from neuralop.models import FNO
 from neuralop.training import AdamW
 from src.util.util_metrics import RelRMSEChannel, RMSEOverall
 from torch.optim.lr_scheduler import ReduceLROnPlateau
+from training.tools.pino_loss import PINOLoss
 from training.tools.spectral_hook import SpectralEnergyHook
 from training.train_base import train_base
 
@@ -23,11 +24,13 @@ CONFIG = {
     "run_suffix": None,
     "seed": 9,
     "device": "cuda" if torch.cuda.is_available() else "cpu",
+    # --- Physics-informed training ---
+    "lambda_phys": 1e-2,
     # --- Spectral diagnostics ---
     "enable_spectral_hooks": False,
     # --- Dataset ---
     "train_dataset_name": "lhs_var80_seed3001",
-    "ood_dataset_name": "lhs_var120_seed4001",
+    "ood_dataset_name": "lhs_var160_seed4001",
     "train_ratio": 0.8,  # fraction of dataset used for training
     "ood_fraction": 0.2,  # fraction of OOD data for evaluation
     # --- Dataloader ---
@@ -62,12 +65,14 @@ model = FNO(
 
 # 🏷️ --- Model naming ---
 parts: list[str] = [
-    "FNO",
+    "PI-FNO",
     f"m{model.n_modes[0]}x{model.n_modes[1]}",
     f"h{model.hidden_channels}",
     f"l{model.n_layers}",
+    f"lam{CONFIG['lambda_phys']:.0e}",
     str(CONFIG["train_dataset_name"]),
 ]
+
 
 if CONFIG.get("run_suffix") is not None:
     parts.append(str(CONFIG["run_suffix"]))
@@ -99,7 +104,10 @@ scheduler = ReduceLROnPlateau(
 )
 
 # --- Losses ---
-train_loss = H1Loss(d=2)
+train_loss = PINOLoss(
+    data_loss=H1Loss(d=2),
+    lambda_phys=CONFIG["lambda_phys"],
+)
 eval_losses = {
     "h1": H1Loss(d=2),
     "l2": LpLoss(d=2, p=2),

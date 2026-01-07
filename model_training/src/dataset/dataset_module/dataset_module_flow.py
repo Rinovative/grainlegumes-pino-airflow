@@ -83,6 +83,7 @@ class FlowModule:
                                      kappaxx, kappayx, kappazx,
                                      kappaxy, kappayy, kappazy,
                                      kappaxz, kappayz, kappazz
+                                     phi, p_bc
                     - "outputs": Tensor [N, C_out, H, W]
                                  Channels:
                                      p, u, v, U

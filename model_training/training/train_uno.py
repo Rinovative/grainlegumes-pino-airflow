@@ -1,14 +1,14 @@
 """
-Model training script for Fourier Neural Operator (FNO).
+Model training script for U-shaped Neural Operator (U-NO).
 
-This script sets up the FNO model, optimizer, scheduler, loss functions,
+This script sets up the U-NO model, optimizer, scheduler, loss functions,
 and launches the training process using the base training function.
 """
 
 import torch
 from neuralop import H1Loss, LpLoss
 from neuralop.layers.spectral_convolution import SpectralConv
-from neuralop.models import FNO
+from neuralop.models import UNO
 from neuralop.training import AdamW
 from src.util.util_metrics import RelRMSEChannel, RMSEOverall
 from torch.optim.lr_scheduler import ReduceLROnPlateau
@@ -52,20 +52,33 @@ CONFIG = {
 # 🧠 2) Model, hooks, optimizer, scheduler, and losses
 # ================================================================
 # --- Model ---
-model = FNO(
-    n_modes=(12, 12),
-    hidden_channels=24,
+n_layers = 4
+
+model = UNO(
     in_channels=7,
     out_channels=3,
+    hidden_channels=24,
+    n_layers=n_layers,
+    uno_out_channels=[24, 24, 24, 24],
+    uno_n_modes=[[12, 12]] * n_layers,
+    uno_scalings=[
+        [1.0, 1.0],  # L0: original
+        [0.5, 0.5],  # L1: downsample
+        [1.0, 1.0],  # L2: process coarse
+        [2.0, 2.0],  # L3: upsample
+    ],
 ).to(CONFIG["device"])
 
 
 # 🏷️ --- Model naming ---
+scaling_tag = "-".join(str(int(s[0]) if s[0].is_integer() else s[0]).replace(".", "") for s in model.uno_scalings)
+
 parts: list[str] = [
-    "FNO",
-    f"m{model.n_modes[0]}x{model.n_modes[1]}",
+    "U-NO",
+    f"m{model.uno_n_modes[0][0]}x{model.uno_n_modes[0][1]}",
     f"h{model.hidden_channels}",
     f"l{model.n_layers}",
+    f"s{scaling_tag}",
     str(CONFIG["train_dataset_name"]),
 ]
 
@@ -73,6 +86,7 @@ if CONFIG.get("run_suffix") is not None:
     parts.append(str(CONFIG["run_suffix"]))
 
 CONFIG["model_name"] = "_".join(parts)
+
 
 # --- Optional: spectral diagnostics ---
 spectral_hook = None
