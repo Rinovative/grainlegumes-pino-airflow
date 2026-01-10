@@ -2,12 +2,21 @@
 Utility functions for constructing evaluation-ready DataFrames.
 
 This module converts the raw Parquet files produced by the artifact
-generator into lightweight evaluation DataFrames. All heavy numerical
-fields (predictions, ground truth, error tensors) remain stored in
-external NPZ files, while the DataFrame contains only scalar metrics
-and flattened meta-information for analysis.
+generator into lightweight evaluation DataFrames.
 
-Supports both plog-space and physical kappa-space metrics.
+Artifacts
+---------
+Expected raw Parquet columns:
+    - case_index
+    - npz_path
+    - l2
+    - rel_l2
+    - kappa_names
+    - meta  (dict, JSON-safe metadata)
+
+After processing, the returned DataFrame additionally contains one column
+per extracted scalar metadata entry, with flattened column names derived
+from the nested meta structure.
 """
 
 from __future__ import annotations
@@ -18,115 +27,113 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-ANISOTROPY_DIM = 2
-MS_WEIGHT_DIM = 2
-N_QUANTILES = 3
+# =============================================================================
+# Helpers
+# =============================================================================
 
 
 def _to_scalar(val: Any) -> Any:
     """
-    Convert nested numpy arrays or lists into Python scalar values.
-
-    Handles metadata fields that are often stored as np.ndarray([value]).
-    Arrays with a single element are converted to float(value). Larger
-    arrays are recursively converted to lists of scalars.
+    Convert numpy scalar arrays to native Python scalars.
 
     Parameters
     ----------
     val : Any
-        Input metadata value.
+        Input value.
 
     Returns
     -------
     Any
-        Scalar value or recursively processed list of scalars.
+        Native Python scalar if input was a numpy scalar array; otherwise unchanged.
 
     """
     if isinstance(val, np.ndarray):
-        if val.size == 1:
-            return float(val.item())
-        return [_to_scalar(x) for x in val]
+        if val.ndim == 0 or val.size == 1:
+            return val.item()
+        return val  # keep non-scalar arrays intact
     return val
 
 
-def extract_meta_features(meta: dict[str, Any]) -> dict[str, float | int | bool]:
+def flatten_meta_scalars(
+    obj: Any,
+    *,
+    prefix: str = "",
+    out: dict[str, float | int | bool | str] | None = None,
+) -> dict[str, float | int | bool | str]:
     """
-    Flatten a nested metadata dictionary into scalar evaluation features.
+    Recursively flatten a nested metadata structure and extract scalar values.
+
+    Rules
+    -----
+    - dict            -> recurse
+    - list of len 1   -> unwrap and recurse
+    - scalar          -> stored as DataFrame column
+    - list of len > 1 -> ignored (not suitable for tabular form)
 
     Parameters
     ----------
-    meta : dict
-        Metadata dictionary parsed from JSON or extracted via artifact generation.
-        Expected keys include:
-            - "statistics": mean, std, min, max, coeff_var, skewness, kurtosis, quantiles
-            - "geometry": domain and grid resolution parameters
-            - "parameters": kappa-generation parameters such as k_mean, anisotropy, ms_scale, etc.
+    obj : Any
+        Arbitrary metadata object (dict, list, scalar).
+    prefix : str
+        Current key prefix used to construct column names.
+    out : dict, optional
+        Output dictionary used internally during recursion.
 
     Returns
     -------
-    dict
-        A flat dictionary mapping feature names to scalar values suitable
-        for inclusion in an evaluation DataFrame.
+    dict[str, float | int | bool | str]
+        Flat mapping: column_name -> scalar value.
 
     """
-    out: dict[str, float | int | bool] = {}
+    if out is None:
+        out = {}
 
-    stats = meta.get("statistics", {})
-    out["stat_mean"] = float(_to_scalar(stats.get("mean", np.nan)))
-    out["stat_std"] = float(_to_scalar(stats.get("std", np.nan)))
-    out["stat_min"] = float(_to_scalar(stats.get("min", np.nan)))
-    out["stat_max"] = float(_to_scalar(stats.get("max", np.nan)))
-    out["stat_cv"] = float(_to_scalar(stats.get("coeff_var", np.nan)))
-    out["stat_skew"] = float(_to_scalar(stats.get("skewness", np.nan)))
-    out["stat_kurt"] = float(_to_scalar(stats.get("kurtosis", np.nan)))
+    # unwrap numpy 0-d arrays
+    obj = _to_scalar(obj)
 
-    quantiles = _to_scalar(stats.get("quantiles", []))
-    if isinstance(quantiles, (list, tuple)) and len(quantiles) == N_QUANTILES:
-        out["stat_q25"] = float(quantiles[0])
-        out["stat_q50"] = float(quantiles[1])
-        out["stat_q75"] = float(quantiles[2])
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            new_prefix = f"{prefix}_{k}" if prefix else k
+            flatten_meta_scalars(v, prefix=new_prefix, out=out)
 
-    geom = meta.get("geometry", {})
-    for key in ["Lx", "Ly", "dx", "dy", "nx", "ny", "res"]:
-        val = _to_scalar(geom.get(key))
-        if val is not None:
-            out[f"geom_{key}"] = float(val)
+    elif isinstance(obj, list):
+        if len(obj) == 1:
+            flatten_meta_scalars(obj[0], prefix=prefix, out=out)
 
-    par = meta.get("parameters", {})
-    for key in ["k_mean", "var_rel", "corr_len_rel", "seed", "ms_scale", "coupling", "volume_fraction", "lognormal"]:
-        val = _to_scalar(par.get(key))
-        if isinstance(val, (float, int, bool)):
-            out[f"par_{key}"] = val
+        elif 2 <= len(obj) <= 4:  # noqa: PLR2004
+            for i, v in enumerate(obj):
+                flatten_meta_scalars(
+                    v,
+                    prefix=f"{prefix}_{i}",
+                    out=out,
+                )
 
-    aniso = _to_scalar(par.get("anisotropy"))
-    if isinstance(aniso, (list, tuple)) and len(aniso) == ANISOTROPY_DIM:
-        major = float(aniso[0])
-        minor = float(aniso[1])
-        out["par_aniso_major"] = major
-        out["par_aniso_minor"] = minor
-        out["par_aniso_ratio"] = major / (minor + 1e-12)
+        # lists longer than this are ignored on purpose
 
-    weights = _to_scalar(par.get("ms_weight"))
-    if isinstance(weights, (list, tuple)) and len(weights) == MS_WEIGHT_DIM:
-        out["par_ms_w1"] = float(weights[0])
-        out["par_ms_w2"] = float(weights[1])
+    elif isinstance(obj, (int, float, bool, str)) and prefix:
+        out[prefix] = obj
 
     return out
 
 
+# =============================================================================
+# DataFrame builders
+# =============================================================================
+
+
 def load_and_build_eval_df(parquet_path: str | Path) -> pd.DataFrame:
     """
-    Load a Parquet artifact file and construct the corresponding evaluation DataFrame.
+    Load a raw evaluation Parquet file and build an enriched DataFrame.
 
     Parameters
     ----------
     parquet_path : str or Path
-        Path to the Parquet file created by the artifact generator.
+        Path to the raw evaluation Parquet file.
 
     Returns
     -------
-    DataFrame
-        Evaluation-ready DataFrame with per-case metrics and flattened metadata.
+    pd.DataFrame
+        Enriched evaluation DataFrame with flattened metadata.
 
     """
     parquet_path = Path(parquet_path)
@@ -138,33 +145,32 @@ def build_eval_df(df_raw: pd.DataFrame) -> pd.DataFrame:
     """
     Build an enriched evaluation DataFrame.
 
-    Raw parquet files created by the artifact generator contain:
-        - case_index
-        - npz_path
-        - l2_plog
-        - rel_l2_plog
-        - l2_kappa
-        - rel_l2_kappa
-        - meta
-
-    The returned DataFrame contains:
-        - the same base fields
-        - flattened meta-information (statistical features, geometry, parameters)
-        - optional additional derived metrics
+    This function:
+    - keeps all existing scalar Parquet columns
+    - flattens all scalar entries found in `meta`
+    - appends them as additional DataFrame columns
+    - drops the raw `meta` column afterwards
 
     Parameters
     ----------
-    df_raw : DataFrame
-        Raw DataFrame loaded from Parquet.
+    df_raw : pd.DataFrame
+        Raw Parquet DataFrame produced by the artifact generator.
 
     Returns
     -------
-    DataFrame
-        Enriched DataFrame containing scalar evaluation features.
+    pd.DataFrame
+        Evaluation DataFrame with flattened scalar metadata.
 
     """
     df = df_raw.copy()
-    meta_features = df["meta"].apply(extract_meta_features)
-    meta_df = pd.DataFrame(meta_features.tolist())
-    df_out = pd.concat([df, meta_df], axis=1)
-    return df_out.drop(columns=["meta"], errors="ignore")
+
+    if "meta" in df.columns:
+        meta_features = df["meta"].apply(flatten_meta_scalars)
+        meta_df = pd.DataFrame(meta_features.tolist())
+
+        df = pd.concat([df, meta_df], axis=1)
+
+        # Drop raw meta to keep table lightweight and analysis-friendly
+        df = df.drop(columns=["meta"], errors="ignore")
+
+    return df

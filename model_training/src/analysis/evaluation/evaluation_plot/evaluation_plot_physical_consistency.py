@@ -19,11 +19,18 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from src import util
+from src.schema.schema_fields import OUTPUT_FIELDS
 
 if TYPE_CHECKING:
     import ipywidgets as widgets
     import pandas as pd
     from matplotlib.figure import Figure
+
+# =============================================================================
+# IMPORTS
+# ============================================================================
+CHANNELS = list(OUTPUT_FIELDS)
+CHANNEL_INDICES = {name: i for i, name in enumerate(CHANNELS)}
 
 # =============================================================================
 # TYPES
@@ -58,19 +65,42 @@ class NPZEntry(TypedDict):
     ----------
     pred : np.ndarray
         Predicted field.
+    gt : np.ndarray
+        Ground truth field.
     kappa : np.ndarray
         Permeability tensor components.
     kappa_names : list[str]
         Names of kappa components.
+    p_bc : np.ndarray
+        Pressure boundary condition.
     meta : Any
         Additional metadata.
 
     """
 
     pred: np.ndarray
+    gt: np.ndarray
     kappa: np.ndarray
     kappa_names: list[str]
+    p_bc: np.ndarray
     meta: Any
+
+
+class ResidualCacheEntry(TypedDict):
+    """
+    Cache entry for residual computation.
+
+    Attributes
+    ----------
+    loaded_until : int
+        Number of cases loaded so far.
+    vals : list[float]
+        List of computed residuals.
+
+    """
+
+    loaded_until: int
+    vals: list[float]
 
 
 # =============================================================================
@@ -92,19 +122,27 @@ def _load_npz(row: pd.Series) -> NPZEntry:
     Parameters
     ----------
     row : pd.Series
-        DataFrame row containing 'npz_path' column.
+        DataFrame row containing 'npz_path'.
 
     Returns
     -------
-    dict[str, np.ndarray]
-        Loaded data including 'pred' and optional 'meta'.
+    NPZEntry
+        Loaded data.
 
     """
     data = np.load(row["npz_path"], allow_pickle=True)
+
+    pred = np.asarray(data["pred"])
+    gt = np.asarray(data["gt"])
+    kappa = np.asarray(data["kappa"])
+    p_bc = np.asarray(data["p_bc"])
+
     return {
-        "pred": np.asarray(data["pred"][0]),
-        "kappa": np.asarray(data["kappa"][0]),
+        "pred": pred,
+        "gt": gt,
+        "kappa": kappa,
         "kappa_names": [str(n) for n in data["kappa_names"]],
+        "p_bc": p_bc,
         "meta": data.get("meta", {}),
     }
 
@@ -136,97 +174,6 @@ def _compute_divergence(u: np.ndarray, v: np.ndarray, Lx: float, Ly: float) -> n
     return du_dx + dv_dy
 
 
-def _compute_brinkman_residual(
-    p: np.ndarray,
-    u: np.ndarray,
-    v: np.ndarray,
-    kappa: np.ndarray,
-    kappa_names: list[str],
-    Lx: float,
-    Ly: float,
-    mu_eff: float = 1.0,
-) -> np.ndarray:
-    """
-    Compute tensor-consistent Darcy-Brinkman residual magnitude.
-
-    Residual:
-        R = -∇p + μ Δu - κ^{-1} · u
-
-    Parameters
-    ----------
-    p : np.ndarray
-        Pressure field [H, W]
-    u, v : np.ndarray
-        Velocity components [H, W]
-    kappa : np.ndarray
-        Permeability tensor components [C_kappa, H, W]
-    kappa_names : list[str]
-        Names of kappa components (e.g. kappaxx, kappaxy, kappayx, kappayy)
-    Lx, Ly : float
-        Domain size
-    mu_eff : float
-        Effective viscosity (scaling only)
-
-    Returns
-    -------
-    np.ndarray
-        Residual magnitude field [H, W]
-
-    """
-    ny, nx = u.shape
-    dx = Lx / (nx - 1)
-    dy = Ly / (ny - 1)
-
-    # --------------------------------------------------
-    # Gradients
-    # --------------------------------------------------
-    dp_dx = np.gradient(p, dx, axis=1)
-    dp_dy = np.gradient(p, dy, axis=0)
-
-    d2u_dx2 = np.gradient(np.gradient(u, dx, axis=1), dx, axis=1)
-    d2u_dy2 = np.gradient(np.gradient(u, dy, axis=0), dy, axis=0)
-    d2v_dx2 = np.gradient(np.gradient(v, dx, axis=1), dx, axis=1)
-    d2v_dy2 = np.gradient(np.gradient(v, dy, axis=0), dy, axis=0)
-
-    lap_u = d2u_dx2 + d2u_dy2
-    lap_v = d2v_dx2 + d2v_dy2
-
-    # --------------------------------------------------
-    # Assemble κ tensor (2D)
-    # --------------------------------------------------
-    name_to_idx = {n.lower(): i for i, n in enumerate(kappa_names)}
-
-    kxx = kappa[name_to_idx["kappaxx"]]
-    kyy = kappa[name_to_idx["kappayy"]]
-
-    kxy = kappa[name_to_idx.get("kappaxy", name_to_idx["kappaxx"])]
-    kyx = kappa[name_to_idx.get("kappayx", name_to_idx["kappayy"])]
-
-    # Determinant
-    det = kxx * kyy - kxy * kyx
-    det = np.maximum(det, EPS)
-
-    # Inverse tensor components
-    inv_kxx = kyy / det
-    inv_kyy = kxx / det
-    inv_kxy = -kxy / det
-    inv_kyx = -kyx / det
-
-    # --------------------------------------------------
-    # Darcy term: κ^{-1} · u
-    # --------------------------------------------------
-    darcy_x = inv_kxx * u + inv_kxy * v
-    darcy_y = inv_kyx * u + inv_kyy * v
-
-    # --------------------------------------------------
-    # Residual
-    # --------------------------------------------------
-    Rx = -dp_dx + mu_eff * lap_u - darcy_x
-    Ry = -dp_dy + mu_eff * lap_v - darcy_y
-
-    return np.sqrt(Rx**2 + Ry**2)
-
-
 # =============================================================================
 # 3-1. VELOCITY DIVERGENCE
 # =============================================================================
@@ -255,7 +202,8 @@ def plot_velocity_divergence(*, datasets: dict[str, pd.DataFrame]) -> widgets.VB
     cache: dict[str, dict[str, Any]] = {
         name: {
             "loaded_until": 0,
-            "vals": [],
+            "vals_pred": [],
+            "vals_gt": [],
         }
         for name in names
     }
@@ -277,6 +225,7 @@ def plot_velocity_divergence(*, datasets: dict[str, pd.DataFrame]) -> widgets.VB
             Matplotlib figure.
 
         """
+        max_cases = int(max_cases)
         for name, df in datasets.items():
             entry = cache[name]
             loaded = entry["loaded_until"]
@@ -289,22 +238,61 @@ def plot_velocity_divergence(*, datasets: dict[str, pd.DataFrame]) -> widgets.VB
             for _, row in df_i.iloc[loaded:max_cases].iterrows():
                 data = _load_npz(row)
                 pred = data["pred"]
+                gt = data["gt"]
+                kappa = data["kappa"]
+                kappa_names = data["kappa_names"]
 
-                # channels: p, u, v
-                u = pred[1]
-                v = pred[2]
-
-                Lx = float(row["geom_Lx"])
-                Ly = float(row["geom_Ly"])
-
-                div = _compute_divergence(u, v, Lx, Ly)
-
+                Lx = float(row["geometry_Lx"])
+                Ly = float(row["geometry_Ly"])
                 L = max(Lx, Ly)
-                U_mean = np.mean(np.sqrt(u**2 + v**2))
 
-                div_rel = np.abs(div).mean() / (U_mean / L + EPS)
+                # ======================
+                # PRED
+                # ======================
+                p_p = pred[CHANNEL_INDICES["p"]]
+                u_p = pred[CHANNEL_INDICES["u"]]
+                v_p = pred[CHANNEL_INDICES["v"]]
 
-                entry["vals"].append(div_rel)
+                R_p = _compute_brinkman_residual(
+                    p=p_p,
+                    u=u_p,
+                    v=v_p,
+                    kappa=kappa,
+                    kappa_names=kappa_names,
+                    Lx=Lx,
+                    Ly=Ly,
+                )
+
+                U_p = np.sqrt(u_p**2 + v_p**2)
+                denom_p = max(np.mean(U_p) / (L**2), 1e-6)
+                Rnorm_p = np.mean(R_p) / denom_p
+
+                if np.isfinite(Rnorm_p):
+                    entry["vals_pred"].append(float(Rnorm_p))
+
+                # ======================
+                # GT
+                # ======================
+                p_g = gt[CHANNEL_INDICES["p"]]
+                u_g = gt[CHANNEL_INDICES["u"]]
+                v_g = gt[CHANNEL_INDICES["v"]]
+
+                R_g = _compute_brinkman_residual(
+                    p=p_g,
+                    u=u_g,
+                    v=v_g,
+                    kappa=kappa,
+                    kappa_names=kappa_names,
+                    Lx=Lx,
+                    Ly=Ly,
+                )
+
+                U_g = np.sqrt(u_g**2 + v_g**2)
+                denom_g = max(np.mean(U_g) / (L**2), 1e-6)
+                Rnorm_g = np.mean(R_g) / denom_g
+
+                if np.isfinite(Rnorm_g):
+                    entry["vals_gt"].append(float(Rnorm_g))
 
             entry["loaded_until"] = max_cases
 
@@ -323,18 +311,26 @@ def plot_velocity_divergence(*, datasets: dict[str, pd.DataFrame]) -> widgets.VB
         ax_legend = fig.add_subplot(gs[0, 1])
         ax_legend.axis("off")
 
-        legend_handles = []
+        handles = []
+        labels = []
 
         for name in names:
-            vals = np.array(cache[name]["vals"], dtype=float)
-            if vals.size == 0:
-                continue
+            vals_p = np.asarray(cache[name]["vals_pred"], dtype=float)
+            vals_g = np.asarray(cache[name]["vals_gt"], dtype=float)
 
-            s = np.sort(vals)
-            y = np.linspace(0, 1, len(s))
+            if vals_p.size > 0:
+                s = np.sort(vals_p)
+                y = np.linspace(0, 1, len(s))
+                (lp,) = ax.plot(s, y, lw=2)
+                handles.append(lp)
+                labels.append(f"{name} (pred)")
 
-            (line,) = ax.plot(s, y, lw=2)
-            legend_handles.append(line)
+            if vals_g.size > 0:
+                s = np.sort(vals_g)
+                y = np.linspace(0, 1, len(s))
+                (lg,) = ax.plot(s, y, lw=2, ls="--")
+                handles.append(lg)
+                labels.append(f"{name} (gt)")
 
         ax.set_xscale("log")
         ax.set_xlabel(r"$\langle |\nabla \cdot \mathbf{u}| \rangle \,/\, (\langle |\mathbf{u}| \rangle / L)$")
@@ -343,8 +339,8 @@ def plot_velocity_divergence(*, datasets: dict[str, pd.DataFrame]) -> widgets.VB
         ax.grid(True, which="both", linestyle="--", alpha=0.3)
 
         ax_legend.legend(
-            legend_handles,
-            names,
+            handles,
+            labels,
             title="Dataset",
             loc="upper left",
         )
@@ -412,6 +408,7 @@ def plot_mass_conservation_error_map(*, datasets: dict[str, pd.DataFrame]) -> wi
             Matplotlib figure.
 
         """
+        max_cases = int(max_cases)
         fig, axes = plt.subplots(1, len(names), figsize=(6 * len(names), 6), squeeze=False)
         axes = axes[0]
 
@@ -425,11 +422,11 @@ def plot_mass_conservation_error_map(*, datasets: dict[str, pd.DataFrame]) -> wi
                 data = _load_npz(row)
                 pred = data["pred"]
 
-                u = pred[1]
-                v = pred[2]
+                u = pred[CHANNEL_INDICES["u"]]
+                v = pred[CHANNEL_INDICES["v"]]
 
-                Lx = float(row["geom_Lx"])
-                Ly = float(row["geom_Ly"])
+                Lx = float(row["geometry_Lx"])
+                Ly = float(row["geometry_Ly"])
 
                 div = _compute_divergence(u, v, Lx, Ly)
 
@@ -461,7 +458,7 @@ def plot_mass_conservation_error_map(*, datasets: dict[str, pd.DataFrame]) -> wi
 
         fig.suptitle("Mean mass conservation error map", y=0.85)
         fig.subplots_adjust(
-            top=0.97,
+            top=0.95,
             bottom=0.07,
             left=0.001,
             right=0.98,
@@ -525,6 +522,7 @@ def plot_pressure_bc_consistency(*, datasets: dict[str, pd.DataFrame]) -> widget
             Matplotlib figure.
 
         """
+        max_cases = int(max_cases)
         for name, df in datasets.items():
             entry = cache[name]
             loaded = entry["loaded_until"]
@@ -538,13 +536,14 @@ def plot_pressure_bc_consistency(*, datasets: dict[str, pd.DataFrame]) -> widget
                 data = _load_npz(row)
                 pred = data["pred"]
 
-                p = pred[0]  # pressure field
-                p_bc = float(row.get("par_p_bc", np.nan))
+                p = pred[0]
+                p_bc = data["p_bc"]
 
-                # inlet boundary at y = 0 (bottom boundary)
                 p_in = p[0, :]
+                bc_in = p_bc[0, :]
 
-                mismatch = np.abs(p_in.mean() - p_bc)
+                mismatch = np.mean(np.abs(p_in - bc_in))
+
                 entry["vals"].append(mismatch)
 
             entry["loaded_until"] = max_cases
@@ -608,21 +607,104 @@ def plot_pressure_bc_consistency(*, datasets: dict[str, pd.DataFrame]) -> widget
 
 
 # =============================================================================
-# 3-4. DARCY-BRINKMAN OPERATOR RESIDUAL
+# 3-4. DARCY-BRINKMAN OPERATOR RESIDUAL (CONSISTENT WITH PINOLoss)
 # =============================================================================
+
+MU_AIR = 1.8139e-5  # Pa*s, MUSS identisch zum Training sein
+EPS_DET = 1e-4
+EPS = 1e-12
+
+
+def _compute_brinkman_residual(
+    p: np.ndarray,
+    u: np.ndarray,
+    v: np.ndarray,
+    kappa: np.ndarray,
+    kappa_names: list[str],
+    Lx: float,
+    Ly: float,
+) -> np.ndarray:
+    """
+    Darcy-Brinkman residual consistent with PINOLoss (NumPy version).
+
+    R = -∇p + div(μ * viscous stress) - μ * K^{-1} u
+    """
+    ny, nx = u.shape
+    dx = Lx / (nx - 1)
+    dy = Ly / (ny - 1)
+
+    # ------------------------------------------------------------
+    # 1) Gradients
+    # ------------------------------------------------------------
+    dpdx = np.gradient(p, dx, axis=1)
+    dpdy = np.gradient(p, dy, axis=0)
+
+    dudx = np.gradient(u, dx, axis=1)
+    dudy = np.gradient(u, dy, axis=0)
+    dvdx = np.gradient(v, dx, axis=1)
+    dvdy = np.gradient(v, dy, axis=0)
+
+    # ------------------------------------------------------------
+    # 2) Viscous stress tensor (phi = 1)
+    # ------------------------------------------------------------
+    mu = MU_AIR
+
+    Kxx = mu * (2.0 * dudx) - (2.0 / 3.0) * mu * (dudx + dvdy)
+    Kyy = mu * (2.0 * dvdy) - (2.0 / 3.0) * mu * (dudx + dvdy)
+    Kxy = mu * (dudy + dvdx)
+
+    divKx = np.gradient(Kxx, dx, axis=1) + np.gradient(Kxy, dy, axis=0)
+    divKy = np.gradient(Kxy, dx, axis=1) + np.gradient(Kyy, dy, axis=0)
+
+    # ------------------------------------------------------------
+    # 3) Kappa handling
+    # ------------------------------------------------------------
+    idx = {name: i for i, name in enumerate(kappa_names)}
+
+    kxx = kappa[idx["kxx"]]
+    kyy = kappa[idx["kyy"]]
+    kxy_rel = kappa[idx["kxy"]] if "kxy" in idx else 0.0
+
+    K0 = np.sqrt(np.maximum(kxx * kyy, 1e-30))
+
+    kxx_hat = kxx / K0
+    kyy_hat = kyy / K0
+    kxy_hat = np.clip(kxy_rel, -0.99, 0.99)
+
+    det_hat = kxx_hat * kyy_hat - kxy_hat**2
+    det_hat_safe = np.maximum(det_hat, EPS_DET)
+
+    invhat_xx = kyy_hat / det_hat_safe
+    invhat_xy = -kxy_hat / det_hat_safe
+    invhat_yy = kxx_hat / det_hat_safe
+
+    inv_xx = invhat_xx / K0
+    inv_xy = invhat_xy / K0
+    inv_yy = invhat_yy / K0
+
+    # ------------------------------------------------------------
+    # 4) Darcy drag
+    # ------------------------------------------------------------
+    drag_x = MU_AIR * (inv_xx * u + inv_xy * v)
+    drag_y = MU_AIR * (inv_xy * u + inv_yy * v)
+
+    # ------------------------------------------------------------
+    # 5) Residual
+    # ------------------------------------------------------------
+    Rx = -dpdx + divKx - drag_x
+    Ry = -dpdy + divKy - drag_y
+
+    return np.sqrt(Rx**2 + Ry**2)
 
 
 def plot_brinkman_residual(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
     """
-    Plot CDF of the normalised Darcy-Brinkman residual magnitude.
+    Plot CDF of normalised Darcy-Brinkman residual for different datasets.
 
-    Residual definition:
-        R = || -∇p + μ Δu - κ^{-1} · u ||
+    Normalised residual:
+        ⟨R⟩ / (⟨|u|⟩ / L²)
 
-    Normalisation:
-        R* = ⟨R⟩ / (⟨|u|⟩ / L²)
-
-    This directly checks operator consistency with the PDE solved in COMSOL.
+    Pred vs GT are shown explicitly.
 
     Parameters
     ----------
@@ -640,12 +722,31 @@ def plot_brinkman_residual(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox
     cache: dict[str, dict[str, Any]] = {
         name: {
             "loaded_until": 0,
-            "vals": [],
+            "vals_pred": [],
+            "vals_gt": [],
         }
         for name in names
     }
 
     def _plot(max_cases: int, *, datasets: dict[str, pd.DataFrame]) -> Figure:
+        """
+        Plot normalised Darcy-Brinkman residual CDF.
+
+        Parameters
+        ----------
+        max_cases : int
+            Maximum number of cases to load.
+        datasets : dict[str, pd.DataFrame]
+            Datasets to evaluate.
+
+        Returns
+        -------
+        Figure
+            Matplotlib figure.
+
+        """
+        max_cases = int(max_cases)
+
         for name, df in datasets.items():
             entry = cache[name]
             loaded = entry["loaded_until"]
@@ -657,63 +758,96 @@ def plot_brinkman_residual(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox
 
             for _, row in df_i.iloc[loaded:max_cases].iterrows():
                 data = _load_npz(row)
+
                 pred = data["pred"]
+                gt = data["gt"]
                 kappa = data["kappa"]
                 kappa_names = data["kappa_names"]
 
-                # channels: p, u, v
-                p = pred[0]
-                u = pred[1]
-                v = pred[2]
-
-                Lx = float(row["geom_Lx"])
-                Ly = float(row["geom_Ly"])
+                Lx = float(row["geometry_Lx"])
+                Ly = float(row["geometry_Ly"])
                 L = max(Lx, Ly)
 
-                R = _compute_brinkman_residual(
-                    p=p,
-                    u=u,
-                    v=v,
+                # ======================
+                # PRED
+                # ======================
+                p_p = pred[CHANNEL_INDICES["p"]]
+                u_p = pred[CHANNEL_INDICES["u"]]
+                v_p = pred[CHANNEL_INDICES["v"]]
+
+                R_p = _compute_brinkman_residual(
+                    p=p_p,
+                    u=u_p,
+                    v=v_p,
                     kappa=kappa,
                     kappa_names=kappa_names,
                     Lx=Lx,
                     Ly=Ly,
                 )
 
-                U_mean = np.mean(np.sqrt(u**2 + v**2))
-                R_norm = np.mean(R) / (U_mean / (L**2) + EPS)
+                U_p = np.sqrt(u_p**2 + v_p**2)
+                denom_p = max(np.mean(U_p) / (L**2), 1e-6)
+                Rnorm_p = np.mean(R_p) / denom_p
 
-                entry["vals"].append(R_norm)
+                if np.isfinite(Rnorm_p):
+                    entry["vals_pred"].append(float(Rnorm_p))
+
+                # ======================
+                # GT
+                # ======================
+                p_g = gt[CHANNEL_INDICES["p"]]
+                u_g = gt[CHANNEL_INDICES["u"]]
+                v_g = gt[CHANNEL_INDICES["v"]]
+
+                R_g = _compute_brinkman_residual(
+                    p=p_g,
+                    u=u_g,
+                    v=v_g,
+                    kappa=kappa,
+                    kappa_names=kappa_names,
+                    Lx=Lx,
+                    Ly=Ly,
+                )
+
+                U_g = np.sqrt(u_g**2 + v_g**2)
+                denom_g = max(np.mean(U_g) / (L**2), 1e-6)
+                Rnorm_g = np.mean(R_g) / denom_g
+
+                if np.isfinite(Rnorm_g):
+                    entry["vals_gt"].append(float(Rnorm_g))
 
             entry["loaded_until"] = max_cases
 
         # --------------------------------------------------
-        # Plot (legend LEFT)
+        # Plot
         # --------------------------------------------------
         fig = plt.figure(figsize=(9.5, 5))
-        gs = fig.add_gridspec(
-            1,
-            2,
-            width_ratios=[1.0, 0.35],
-            wspace=0.25,
-        )
+        gs = fig.add_gridspec(1, 2, width_ratios=[1.0, 0.35], wspace=0.25)
 
         ax = fig.add_subplot(gs[0, 0])
-        ax_legend = fig.add_subplot(gs[0, 1])
-        ax_legend.axis("off")
+        ax_leg = fig.add_subplot(gs[0, 1])
+        ax_leg.axis("off")
 
-        legend_handles = []
+        handles = []
+        labels = []
 
         for name in names:
-            vals = np.array(cache[name]["vals"], dtype=float)
-            if vals.size == 0:
-                continue
+            vals_p = np.asarray(cache[name]["vals_pred"], dtype=float)
+            vals_g = np.asarray(cache[name]["vals_gt"], dtype=float)
 
-            s = np.sort(vals)
-            y = np.linspace(0, 1, len(s))
+            if vals_p.size > 0:
+                s = np.sort(vals_p)
+                y = np.linspace(0, 1, len(s))
+                (lp,) = ax.plot(s, y, lw=2)
+                handles.append(lp)
+                labels.append(f"{name} (pred)")
 
-            (line,) = ax.plot(s, y, lw=2)
-            legend_handles.append(line)
+            if vals_g.size > 0:
+                s = np.sort(vals_g)
+                y = np.linspace(0, 1, len(s))
+                (lg,) = ax.plot(s, y, lw=2, ls="--")
+                handles.append(lg)
+                labels.append(f"{name} (gt)")
 
         ax.set_xscale("log")
         ax.set_xlabel(r"$\langle R \rangle \,/\, (\langle |\mathbf{u}| \rangle / L^2)$")
@@ -721,20 +855,9 @@ def plot_brinkman_residual(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox
         ax.set_title("Normalised Darcy-Brinkman residual distribution")
         ax.grid(True, which="both", linestyle="--", alpha=0.3)
 
-        ax_legend.legend(
-            legend_handles,
-            names,
-            title="Dataset",
-            loc="upper left",
-        )
+        ax_leg.legend(handles, labels, title="Dataset", loc="upper left")
 
-        fig.subplots_adjust(
-            top=0.90,
-            bottom=0.15,
-            left=0.05,
-            right=0.98,
-        )
-
+        fig.subplots_adjust(top=0.90, bottom=0.15, left=0.05, right=0.98)
         return fig
 
     return util.util_plot.make_casecount_viewer(

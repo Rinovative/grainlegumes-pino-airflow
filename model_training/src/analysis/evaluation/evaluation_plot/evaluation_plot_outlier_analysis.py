@@ -17,17 +17,26 @@ from IPython.display import Markdown, display
 from matplotlib import cm
 
 from src import util
+from src.schema.schema_fields import OUTPUT_FIELDS
 
 if TYPE_CHECKING:
     from matplotlib.figure import Figure
 
 # =============================================================================
+# CHANNELS AND UNITS
+# =============================================================================
+CHANNELS = OUTPUT_FIELDS
+CHANNEL_INDICES = {name: i for i, name in enumerate(CHANNELS)}
+UNIT_MAP = {
+    "p": "Pa",
+    "u": "m/s",
+    "v": "m/s",
+    "U": "m/s",
+}
+
+# =============================================================================
 # CONSTANTS
 # =============================================================================
-
-CHANNELS = ["p", "u", "v", "U"]
-UNIT_MAP = {"p": "Pa", "u": "m/s", "v": "m/s", "U": "m/s"}
-
 N_LEVELS = 10
 MASK_THRESHOLD = 1e-4
 
@@ -72,6 +81,24 @@ def _fmt_num(x: Any) -> str:
     return f"{xf:.2e}"
 
 
+def _is_parameter_column(c: str) -> bool:
+    """
+    Check if a column name corresponds to a parameter column.
+
+    Parameters
+    ----------
+    c : str
+        Column name.
+
+    Returns
+    -------
+    bool
+        True if the column is a parameter column, False otherwise.
+
+    """
+    return c.startswith("par_") or (c.startswith("generator_") and "_parameters_" in c)
+
+
 # =============================================================================
 # GLOBAL CACHES
 # =============================================================================
@@ -109,11 +136,39 @@ def _load_npz(row: pd.Series | pd.DataFrame) -> tuple[np.ndarray, np.ndarray, np
         return _npz_cache[key]
 
     data = np.load(key, allow_pickle=True)
-    pred = data["pred"][0]
-    gt = data["gt"][0]
-    err = data["err"][0]
-    kappa = data["kappa"][0]
-    kappa_names = list(data["kappa_names"])
+    pred = np.asarray(data["pred"])
+    gt = np.asarray(data["gt"])
+    err = np.asarray(data["err"])
+    kappa = np.asarray(data["kappa"])
+    kappa_names = [str(n) for n in data["kappa_names"]]
+
+    # -------------------------------------------------
+    # Normalize shapes to (C, H, W)
+    # Accept common storage variants:
+    #   (1, C, H, W) -> (C, H, W)
+    #   (C, H, W)    -> (C, H, W)
+    #   (H, W)       -> (1, H, W)
+    # -------------------------------------------------
+    def _to_chw(a: np.ndarray) -> np.ndarray:
+        if a.ndim == 4 and a.shape[0] == 1:  # noqa: PLR2004
+            return a[0]
+        if a.ndim == 3:  # noqa: PLR2004
+            return a
+        if a.ndim == 2:  # noqa: PLR2004
+            return a[np.newaxis, ...]
+        msg = f"Unsupported array shape: {a.shape}"
+        raise ValueError(msg)
+
+    pred = _to_chw(pred)
+    gt = _to_chw(gt)
+    err = _to_chw(err)
+
+    # kappa: commonly (1, K, H, W) or (K, H, W)
+    if kappa.ndim == 4 and kappa.shape[0] == 1:  # noqa: PLR2004
+        kappa = kappa[0]
+    elif kappa.ndim != 3:  # noqa: PLR2004
+        msg = f"Unsupported kappa shape: {kappa.shape}"
+        raise ValueError(msg)
 
     _npz_cache[key] = (pred, gt, err, kappa, kappa_names)
     return pred, gt, err, kappa, kappa_names
@@ -161,7 +216,12 @@ def _rel_l2_per_channel(err: np.ndarray, gt: np.ndarray) -> dict[str, float]:
         Relative L2 error per channel.
 
     """
-    return {ch: _rel_l2(err[i], gt[i]) for i, ch in enumerate(CHANNELS)}
+    out = {}
+    for ch in CHANNELS:
+        k = CHANNEL_INDICES[ch]
+        if k < err.shape[0] and k < gt.shape[0]:
+            out[ch] = _rel_l2(err[k], gt[k])
+    return out
 
 
 # =============================================================================
@@ -184,7 +244,7 @@ def _select_reference_case(df: pd.DataFrame) -> int:
         Index of the reference case.
 
     """
-    par_cols = [c for c in df.columns if c.startswith("par_") and c != "par_seed"]
+    par_cols = [c for c in df.columns if _is_parameter_column(c) and c != "par_seed"]
 
     if not par_cols:
         return int(df.index[len(df) // 2])
@@ -221,11 +281,13 @@ def _select_topk_per_channel(*, datasets: dict[str, pd.DataFrame], k: int) -> di
 
     for name, df in datasets.items():
         out[name] = {}
-        for ci, ch in enumerate(CHANNELS):
+        for ch in CHANNELS:
+            k = CHANNEL_INDICES[ch]
             scores = []
             for idx, row in df.iterrows():
                 _, gt, err, _, _ = _load_npz(row)
-                scores.append((idx, _rel_l2(err[ci], gt[ci])))
+                if k < err.shape[0] and k < gt.shape[0]:
+                    scores.append((idx, _rel_l2(err[k], gt[k])))
             scores.sort(key=lambda x: x[1], reverse=True)
             out[name][ch] = [i for i, _ in scores[:k]]
 
@@ -315,9 +377,19 @@ def _plot_prediction_overview_case(
     """
     pred, gt, err, kappa, kappa_names = _load_npz(row)
 
-    Lx = _scalar(row["geom_Lx"])
-    Ly = _scalar(row["geom_Ly"])
-    ny, nx = pred[0].shape
+    Lx = float(row["geometry_Lx"])
+    Ly = float(row["geometry_Ly"])
+    # -------------------------------------------------
+    # Robust shape handling (C,H,W) vs (H,W)
+    # -------------------------------------------------
+    if pred.ndim == 3:  # noqa: PLR2004
+        ny, nx = pred[CHANNEL_INDICES[CHANNELS[0]]].shape
+    elif pred.ndim == 2:  # noqa: PLR2004
+        ny, nx = pred.shape
+    else:
+        msg = f"Unsupported pred shape: {pred.shape}"
+        raise ValueError(msg)
+
     X, Y = np.meshgrid(np.linspace(0, Lx, nx), np.linspace(0, Ly, ny))
 
     fig, axes = plt.subplots(4, 4, figsize=(20, 9))
@@ -335,9 +407,23 @@ def _plot_prediction_overview_case(
 
         # Prediction
         ax = axes[r, 0]
-        im = ax.contourf(X, Y, pred[r], levels=util.util_plot_components.compute_levels(pred[r]), cmap="turbo")
+        k = CHANNEL_INDICES[ch]
+        if k >= pred.shape[0]:
+            ax.axis("off")
+            continue
+        field = pred[k]
+
+        im = ax.contourf(
+            X,
+            Y,
+            field,
+            levels=util.util_plot_components.compute_levels(field),
+            cmap="turbo",
+        )
         if ch in {"u", "v", "U"}:
-            util.util_plot_components.overlay_streamlines(ax, X, Y, pred[1], pred[2])
+            u = pred[CHANNEL_INDICES["u"]]
+            v = pred[CHANNEL_INDICES["v"]]
+            util.util_plot_components.overlay_streamlines(ax, X, Y, u, v)
         ax.set_title(f"{ch} pred [{UNIT_MAP[ch]}]")
         cb = fig.colorbar(im, ax=ax, fraction=0.04)
         cb.ax.yaxis.set_major_formatter(util.util_plot_components.choose_colorbar_formatter(*im.get_clim()))
@@ -345,9 +431,11 @@ def _plot_prediction_overview_case(
 
         # Ground truth
         ax = axes[r, 1]
-        im = ax.contourf(X, Y, gt[r], levels=util.util_plot_components.compute_levels(gt[r]), cmap="turbo")
+        im = ax.contourf(X, Y, gt[k], levels=util.util_plot_components.compute_levels(gt[k]), cmap="turbo")
         if ch in {"u", "v", "U"}:
-            util.util_plot_components.overlay_streamlines(ax, X, Y, gt[1], gt[2])
+            u = gt[CHANNEL_INDICES["u"]]
+            v = gt[CHANNEL_INDICES["v"]]
+            util.util_plot_components.overlay_streamlines(ax, X, Y, u, v)
         ax.set_title(f"{ch} true [{UNIT_MAP[ch]}]")
         cb = fig.colorbar(im, ax=ax, fraction=0.04)
         cb.ax.yaxis.set_major_formatter(util.util_plot_components.choose_colorbar_formatter(*im.get_clim()))
@@ -356,7 +444,7 @@ def _plot_prediction_overview_case(
         # Error
         ax = axes[r, 2]
         if error_mode.value == "MAE":
-            field = np.abs(err[r])
+            field = np.abs(err[k])
             field = np.nan_to_num(field, nan=0.0)
             levels = np.linspace(
                 0.0,
@@ -365,8 +453,8 @@ def _plot_prediction_overview_case(
             )
             title = f"{ch} MAE [{UNIT_MAP[ch]}]"
         else:
-            abs_err = np.abs(err[r])
-            true_abs = np.abs(gt[r])
+            abs_err = np.abs(err[k])
+            true_abs = np.abs(gt[k])
             field = np.asarray(abs_err / (true_abs + 1e-12) * 100.0, dtype=float)
             field[true_abs < MASK_THRESHOLD] = np.nan
             levels = np.linspace(
@@ -493,6 +581,35 @@ def _style_rank_diverging(df: pd.DataFrame, columns: list[str], kind: pd.Series)
     return pd.DataFrame(out)
 
 
+def _short_parameter_name(c: str) -> str:
+    """
+    Shorten parameter column names for display only.
+
+    Examples
+    --------
+    par_var -> var
+    generator_tensor_parameters_strength -> tensor_strength
+
+    Parameters
+    ----------
+    c : str
+        Original column name.
+
+    Returns
+    -------
+    str
+        Shortened column name.
+
+    """
+    if c.startswith("par_"):
+        return c[len("par_") :]
+
+    if c.startswith("generator_") and "_parameters_" in c:
+        return c.split("_parameters_", 1)[1]
+
+    return c
+
+
 def plot_outlier_tables_per_channel(*, datasets: dict[str, pd.DataFrame], k: int = 5) -> widgets.VBox:
     """
     Plot tables showing the worst k cases per channel, including the reference case.
@@ -515,7 +632,7 @@ def plot_outlier_tables_per_channel(*, datasets: dict[str, pd.DataFrame], k: int
     output = widgets.Output()
 
     def _parameter_columns(df: pd.DataFrame) -> list[str]:
-        return [c for c in df.columns if c.startswith("par_") and c != "par_seed"]
+        return [c for c in df.columns if _is_parameter_column(c) and c != "par_seed"]
 
     def _render(_: Any = None) -> None:
         output.clear_output(wait=True)
@@ -571,6 +688,8 @@ def plot_outlier_tables_per_channel(*, datasets: dict[str, pd.DataFrame], k: int
 
                 df_out = pd.DataFrame(rows)
                 kind = df_out.pop("__kind__")
+                rename_map = {c: _short_parameter_name(c) for c in df_out.columns}
+                df_out = df_out.rename(columns=rename_map)
 
                 display(
                     df_out.style.format({c: _fmt_num for c in df_out.columns if pd.api.types.is_numeric_dtype(df_out[c])})
@@ -745,7 +864,7 @@ def plot_extreme_input_table(*, datasets: dict[str, pd.DataFrame]) -> widgets.HB
         out = widgets.Output()
 
         with out:
-            par_cols = [c for c in df.columns if c.startswith("par_") and c != "par_seed"]
+            par_cols = [c for c in df.columns if _is_parameter_column(c) and c != "par_seed"]
             ref_idx = _select_reference_case(df)
             ref_row = _as_series(df.loc[ref_idx])
 
@@ -794,7 +913,7 @@ def _candidate_input_columns(*, datasets: dict[str, pd.DataFrame]) -> list[str]:
 
     """
     first_df = next(iter(datasets.values()))
-    return [c for c in first_df.columns if c.startswith("par_") and c != "par_seed"]
+    return [c for c in first_df.columns if _is_parameter_column(c) and c != "par_seed"]
 
 
 def _select_extreme_inputs(*, datasets: dict[str, pd.DataFrame], column: str) -> dict[str, pd.DataFrame]:

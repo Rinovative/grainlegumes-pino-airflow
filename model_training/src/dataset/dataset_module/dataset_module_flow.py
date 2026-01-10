@@ -57,6 +57,8 @@ from typing import Any
 
 import torch
 
+from src.schema.schema_training import default_training_inputs, default_training_outputs
+
 
 class FlowModule:
     """Unified loader for flow datasets with optional channel selection."""
@@ -78,12 +80,11 @@ class FlowModule:
             Merged dataset format:
                 Required keys:
                     - "inputs":  Tensor [N, C_in, H, W]
-                                 Channels (in order):
-                                     x, y,
-                                     kappaxx, kappayx, kappazx,
-                                     kappaxy, kappayy, kappazy,
-                                     kappaxz, kappayz, kappazz
-                                     phi, p_bc
+                                Input channels (in canonical internal order):
+                                    x, y,
+                                    kxx, kyy (, kzz),
+                                    kxy (, kxz, kyz),
+                                    phi, p_bc
                     - "outputs": Tensor [N, C_out, H, W]
                                  Channels:
                                      p, u, v, U
@@ -126,9 +127,18 @@ class FlowModule:
             input_dict = data["input_fields"]
             output_dict = data["output_fields"]
 
-            # Deterministic key order
-            input_names = list(input_dict.keys())
-            output_names = list(output_dict.keys())
+            available_inputs = list(input_dict.keys())
+
+            # --- Dimension robust bestimmen ---
+            dim = 3 if {"kxx", "kyy", "kzz"}.issubset(available_inputs) else 2
+
+            # --- Kanonische Reihenfolge aus Schema ---
+            input_names = default_training_inputs(dim)
+            output_names = default_training_outputs(dim)
+
+            # --- Safety: nur vorhandene Felder ---
+            input_names = [k for k in input_names if k in input_dict]
+            output_names = [k for k in output_names if k in output_dict]
 
             # Convert arrays → tensors
             input_stack = torch.stack([torch.tensor(input_dict[name], dtype=torch.float32) for name in input_names], dim=0)

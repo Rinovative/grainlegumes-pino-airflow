@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from src import util
+from src.schema.schema_fields import OUTPUT_FIELDS
 
 if TYPE_CHECKING:
     import ipywidgets as widgets
@@ -25,6 +26,11 @@ if TYPE_CHECKING:
 
     from src.util.util_plot_components import CheckboxGroup
 
+# ============================================================================
+# CHANNEL DEFINITIONS
+# ============================================================================
+CHANNELS = OUTPUT_FIELDS
+CHANNEL_INDICES = {name: i for i, name in enumerate(CHANNELS)}
 
 # =============================================================================
 # 2-1. ERROR VS |GT| MAGNITUDE (OVERLAYED DATASETS, CASECOUNT)
@@ -43,9 +49,6 @@ def plot_error_vs_gt_magnitude(*, datasets: dict[str, pd.DataFrame]) -> widgets.
 
     Uses casecount viewer to incrementally load NPZ files.
     """
-    channels = ["p", "u", "v", "U"]
-    channel_idx = {"p": 0, "u": 1, "v": 2, "U": 3}
-
     n_bins = 15
     eps = 1e-12
     names = list(datasets.keys())
@@ -56,8 +59,8 @@ def plot_error_vs_gt_magnitude(*, datasets: dict[str, pd.DataFrame]) -> widgets.
     cache: dict[str, dict[str, Any]] = {
         name: {
             "loaded_until": 0,
-            "gt": {ch: [] for ch in channels},
-            "err": {ch: [] for ch in channels},
+            "gt": {ch: [] for ch in CHANNELS},
+            "err": {ch: [] for ch in CHANNELS},
         }
         for name in names
     }
@@ -104,8 +107,8 @@ def plot_error_vs_gt_magnitude(*, datasets: dict[str, pd.DataFrame]) -> widgets.
                 pred = data["pred"][0]
                 gt = data["gt"][0]
 
-                for ch in channels:
-                    k = channel_idx[ch]
+                for ch in CHANNELS:
+                    k = CHANNEL_INDICES[ch]
                     g = np.abs(gt[k]).ravel()
 
                     e = (np.abs(pred[k] - gt[k]) / (np.abs(gt[k]) + eps)).ravel()
@@ -132,14 +135,14 @@ def plot_error_vs_gt_magnitude(*, datasets: dict[str, pd.DataFrame]) -> widgets.
         # --------------------------------------------------------------
         fig = plt.figure(figsize=(9.5, 9))
         gs = fig.add_gridspec(
-            len(channels),
+            len(CHANNELS),
             2,
             width_ratios=[1.0, 0.35],
             hspace=0.35,
             wspace=0.25,
         )
 
-        axes = [fig.add_subplot(gs[r, 0]) for r in range(len(channels))]
+        axes = [fig.add_subplot(gs[r, 0]) for r in range(len(CHANNELS))]
         ax_legend = fig.add_subplot(gs[:, 1])
         ax_legend.axis("off")
 
@@ -148,7 +151,7 @@ def plot_error_vs_gt_magnitude(*, datasets: dict[str, pd.DataFrame]) -> widgets.
         # --------------------------------------------------------------
         # PLOTS
         # --------------------------------------------------------------
-        for ax, ch in zip(axes, channels, strict=False):
+        for ax, ch in zip(axes, CHANNELS, strict=False):
             for name in active:
                 g = np.concatenate(cache[name]["gt"][ch])
                 e = np.concatenate(cache[name]["err"][ch])
@@ -193,7 +196,7 @@ def plot_error_vs_gt_magnitude(*, datasets: dict[str, pd.DataFrame]) -> widgets.
                     alpha=0.25,
                 )
 
-                if ch == channels[0]:
+                if ch == CHANNELS[0]:
                     legend_handles.append(line)
 
             # Axis scaling
@@ -271,9 +274,6 @@ def plot_error_vs_boundary_distance(
         Interactive casecount viewer widget.
 
     """
-    channels = ["p", "u", "v", "U"]
-    channel_idx = {"p": 0, "u": 1, "v": 2, "U": 3}
-
     # Distance bands (normalised distance 0..1)
     bands = [
         (0.00, 0.05),
@@ -291,7 +291,7 @@ def plot_error_vs_boundary_distance(
         name: {
             "loaded_until": 0,
             "count": 0,
-            "sum": {ch: np.zeros(len(bands), dtype=float) for ch in channels},
+            "sum": {ch: np.zeros(len(bands), dtype=float) for ch in CHANNELS},
         }
         for name in datasets
     }
@@ -346,10 +346,10 @@ def plot_error_vs_boundary_distance(
 
             for path in df_new["npz_path"]:
                 data = np.load(path)
-                pred = data["pred"][0]
-                gt = data["gt"][0]
+                pred = data["pred"]
+                gt = data["gt"]
 
-                ny, nx = gt.shape[1:]
+                _, ny, nx = gt.shape
 
                 # Distance to boundary (cells)
                 yy, xx = np.meshgrid(
@@ -365,7 +365,7 @@ def plot_error_vs_boundary_distance(
                 dist = dist_cells / d_max
 
                 for ch in active_channels:
-                    k = channel_idx[ch]
+                    k = CHANNEL_INDICES[ch]
                     err = np.abs(pred[k] - gt[k])
 
                     for i, (lo, hi) in enumerate(bands):
@@ -455,7 +455,7 @@ def plot_error_vs_boundary_distance(
     # ------------------------------------------------------------------
     # UI COMPONENTS
     # ------------------------------------------------------------------
-    channel_selector = util.util_plot_components.ui_checkbox_channels(default_on=["p", "u", "v", "U"])
+    channel_selector = util.util_plot_components.ui_checkbox_channels(default_on=CHANNELS)
 
     # ------------------------------------------------------------------
     # CASECOUNT VIEWER

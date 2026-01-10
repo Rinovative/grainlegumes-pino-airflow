@@ -43,9 +43,17 @@ from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
 from src.dataset.dataset_simulation import PermeabilityFlowDataset
+from src.schema.schema_training import DEFAULT_INPUTS_2D, DEFAULT_OUTPUTS_2D
 
 if TYPE_CHECKING:
     from torch import Tensor
+
+# ======================================================================
+# CHANNEL CONFIGURATION
+# ======================================================================
+
+INPUT_CHANNELS = DEFAULT_INPUTS_2D
+OUTPUT_CHANNELS = DEFAULT_OUTPUTS_2D
 
 
 # ======================================================================
@@ -229,14 +237,42 @@ def load_inference_context(
     model_cfg = cfg["model"]
 
     model = _build_model_from_config(model_cfg)
+    # ------------------------------
+    # HARD GUARDS: schema <-> model
+    # ------------------------------
+    if getattr(model, "in_channels", None) is not None and model.in_channels != len(INPUT_CHANNELS):
+        msg = f"in_channels mismatch: model.in_channels={model.in_channels} vs schema={len(INPUT_CHANNELS)} ({INPUT_CHANNELS})"
+        raise RuntimeError(msg)
+
+    if getattr(model, "out_channels", None) is not None and model.out_channels != len(OUTPUT_CHANNELS):
+        msg = f"out_channels mismatch: model.out_channels={model.out_channels} vs schema={len(OUTPUT_CHANNELS)} ({OUTPUT_CHANNELS})"
+        raise RuntimeError(msg)
+
     model.load_state_dict(torch.load(checkpoint_path, map_location=device))
     model = model.to(device)
 
     processor = _load_normalizer(run_dir / "normalizer.pt", device=device)
 
-    full_dataset = PermeabilityFlowDataset(str(dataset_path))
-    dataset_eval = cast("Dataset[dict[str, Tensor]]", full_dataset)
+    full_dataset = PermeabilityFlowDataset(
+        str(dataset_path),
+        include_inputs=INPUT_CHANNELS,
+        include_outputs=OUTPUT_CHANNELS,
+    )
+    # ------------------------------
+    # HARD GUARDS: schema <-> dataset
+    # ------------------------------
+    ds_in = getattr(full_dataset, "include_inputs", None) or getattr(full_dataset, "input_fields", None)
+    ds_out = getattr(full_dataset, "include_outputs", None) or getattr(full_dataset, "output_fields", None)
 
+    if ds_in is not None and list(ds_in) != list(INPUT_CHANNELS):
+        msg = f"Dataset input schema mismatch.\nExpected: {INPUT_CHANNELS}\nGot: {list(ds_in)}"
+        raise RuntimeError(msg)
+
+    if ds_out is not None and list(ds_out) != list(OUTPUT_CHANNELS):
+        msg = f"Dataset output schema mismatch.\nExpected: {OUTPUT_CHANNELS}\nGot: {list(ds_out)}"
+        raise RuntimeError(msg)
+
+    dataset_eval = cast("Dataset[dict[str, Tensor]]", full_dataset)
     loader = _build_eval_loader(dataset_eval, batch_size=batch_size)
 
     return model, loader, processor, device

@@ -23,6 +23,7 @@ from matplotlib.lines import Line2D
 from scipy.stats import gaussian_kde
 
 from src import util
+from src.schema.schema_fields import OUTPUT_FIELDS
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -31,6 +32,14 @@ if TYPE_CHECKING:
     import pandas as pd
     from matplotlib.axes import Axes
     from matplotlib.figure import Figure
+
+
+# =============================================================================
+# GLOBAL OUTPUT CHANNEL CONFIGURATION (schema-derived)
+# =============================================================================
+
+CHANNELS = OUTPUT_FIELDS
+CHANNEL_INDICES = {name: i for i, name in enumerate(CHANNELS)}
 
 # =============================================================================
 # INTERNAL HELPERS
@@ -326,8 +335,8 @@ def plot_error_distribution(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBo
                 for path in df_new["npz_path"]:
                     data = np.load(path)
 
-                    err = data["err"][0]
-                    gt = data["gt"][0]
+                    err = data["err"]
+                    gt = data["gt"]
 
                     e = np.linalg.norm(err, axis=0)
                     g = np.linalg.norm(gt, axis=0)
@@ -499,17 +508,14 @@ def plot_global_gt_vs_pred(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox
 
     """
     names = list(datasets.keys())
-    channels = ["p", "u", "v", "U"]
-    channel_indices = {"p": 0, "u": 1, "v": 2, "U": 3}
-
     # =========================================================================
     # Strongly typed cache (mypy + pylance clean)
     # =========================================================================
     cache: dict[str, GTCacheEntry] = {
         name: GTCacheEntry(
             loaded_until=0,
-            gt_means={ch: [] for ch in channels},
-            pred_means={ch: [] for ch in channels},
+            gt_means={ch: [] for ch in CHANNELS},
+            pred_means={ch: [] for ch in CHANNELS},
         )
         for name in names
     }
@@ -533,12 +539,12 @@ def plot_global_gt_vs_pred(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox
                 for path in df_new["npz_path"]:
                     data = np.load(path)
 
-                    gt = data["gt"][0]
-                    pred = data["pred"][0]
+                    gt = data["gt"]
+                    pred = data["pred"]
                     C = gt.shape[0]
 
-                    for ch in channels:
-                        idx = channel_indices[ch]
+                    for ch in CHANNELS:
+                        idx = CHANNEL_INDICES[ch]
                         if idx < C:
                             gt_means[ch].append(float(gt[idx].mean()))
                             pred_means[ch].append(float(pred[idx].mean()))
@@ -549,7 +555,7 @@ def plot_global_gt_vs_pred(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox
         # Prepare figure
         # ---------------------------------------------------------------------
         num_datasets = len(names)
-        num_channels = len(channels)
+        num_channels = len(CHANNELS)
 
         fig = plt.figure(figsize=(6 * num_datasets, 9))
         gs = fig.add_gridspec(
@@ -564,7 +570,7 @@ def plot_global_gt_vs_pred(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox
         # ---------------------------------------------------------------------
         # Plot per dataset and per channel
         # ---------------------------------------------------------------------
-        for row_idx, ch in enumerate(channels):
+        for row_idx, ch in enumerate(CHANNELS):
             row_axes: list[Axes] = []
 
             for col_idx, name in enumerate(names):
@@ -657,8 +663,6 @@ def plot_mean_error_maps(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
         Interactive widget with case count slider and mean error maps.
 
     """
-    channels = ["p", "u", "v", "U"]
-    channel_idx = {"p": 0, "u": 1, "v": 2, "U": 3}
     mask_threshold = 1e-4
 
     # -------------------------------------------------------
@@ -684,8 +688,8 @@ def plot_mean_error_maps(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
             "loaded_until": 0,  # int
             "count": 0,  # int
             # running sums
-            "sum_mae": dict.fromkeys(channels),  # np.ndarray | None
-            "sum_rel": dict.fromkeys(channels),  # np.ndarray | None
+            "sum_mae": dict.fromkeys(CHANNELS),  # np.ndarray | None
+            "sum_rel": dict.fromkeys(CHANNELS),  # np.ndarray | None
         }
 
     # -------------------------------------------------------
@@ -720,7 +724,7 @@ def plot_mean_error_maps(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
         mode = error_mode.value  # "MAE" or "Relative [%]"
         names = list(datasets.keys())
         num_datasets = len(names)
-        num_channels = len(channels)
+        num_channels = len(CHANNELS)
 
         # ===================================================
         # LOAD NEW CASES INTO CACHE
@@ -734,8 +738,8 @@ def plot_mean_error_maps(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
             # Set geometry once
             if entry["geom"] is None:
                 entry["geom"] = (
-                    float(df_i["geom_Lx"].iloc[0]),
-                    float(df_i["geom_Ly"].iloc[0]),
+                    float(df_i["geometry_Lx"].iloc[0]),
+                    float(df_i["geometry_Ly"].iloc[0]),
                 )
 
             # Nothing new to load
@@ -747,13 +751,13 @@ def plot_mean_error_maps(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
 
             for path in df_new["npz_path"]:
                 data = np.load(path)
-                pred = data["pred"][0]
-                gt = data["gt"][0]
+                pred = data["pred"]
+                gt = data["gt"]
 
                 # Compute MAE + REL both at load time.
                 # This allows switching modes instantly without reloading NPZ.
-                for ch in channels:
-                    k = channel_idx[ch]
+                for ch in CHANNELS:
+                    k = CHANNEL_INDICES[ch]
 
                     # ============ MAE ============
                     mae = np.abs(pred[k] - gt[k])
@@ -787,7 +791,7 @@ def plot_mean_error_maps(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
         fig = plt.figure(figsize=(6 * num_datasets, 9))
         gs = fig.add_gridspec(num_channels, num_datasets, wspace=0.25, hspace=0.35)
 
-        for r, ch in enumerate(channels):
+        for r, ch in enumerate(CHANNELS):
             for c, name in enumerate(names):
                 ax = fig.add_subplot(gs[r, c])
                 entry = cache[name]
@@ -876,8 +880,6 @@ def plot_std_error_maps(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
         Interactive widget with case count slider and standard deviation error maps.
 
     """
-    channels = ["p", "u", "v", "U"]
-    channel_idx = {"p": 0, "u": 1, "v": 2, "U": 3}
     mask_threshold = 1e-4
 
     # -------------------------------------------------------
@@ -890,8 +892,8 @@ def plot_std_error_maps(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
             "geom": None,
             "loaded_until": 0,
             "count": 0,
-            "mean": dict.fromkeys(channels),  # running mean
-            "M2": dict.fromkeys(channels),  # running sum of squares
+            "mean": dict.fromkeys(CHANNELS),  # running mean
+            "M2": dict.fromkeys(CHANNELS),  # running sum of squares
         }
 
     # -------------------------------------------------------
@@ -904,7 +906,7 @@ def plot_std_error_maps(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
     ) -> Figure:
         names = list(datasets.keys())
         num_datasets = len(names)
-        num_channels = len(channels)
+        num_channels = len(CHANNELS)
 
         # ===================================================
         # LOAD NEW CASES
@@ -916,8 +918,8 @@ def plot_std_error_maps(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
 
             if entry["geom"] is None:
                 entry["geom"] = (
-                    float(df_i["geom_Lx"].iloc[0]),
-                    float(df_i["geom_Ly"].iloc[0]),
+                    float(df_i["geometry_Lx"].iloc[0]),
+                    float(df_i["geometry_Ly"].iloc[0]),
                 )
 
             if max_cases <= loaded:
@@ -927,14 +929,14 @@ def plot_std_error_maps(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
 
             for path in df_new["npz_path"]:
                 data = np.load(path)
-                pred = data["pred"][0]
-                gt = data["gt"][0]
+                pred = data["pred"]
+                gt = data["gt"]
 
                 entry["count"] += 1
                 n = entry["count"]
 
-                for ch in channels:
-                    k = channel_idx[ch]
+                for ch in CHANNELS:
+                    k = CHANNEL_INDICES[ch]
 
                     abs_err = np.abs(pred[k] - gt[k])
                     true_abs = np.abs(gt[k])
@@ -957,7 +959,7 @@ def plot_std_error_maps(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
         fig = plt.figure(figsize=(6 * num_datasets, 9))
         gs = fig.add_gridspec(num_channels, num_datasets, wspace=0.25, hspace=0.35)
 
-        for r, ch in enumerate(channels):
+        for r, ch in enumerate(CHANNELS):
             for c, name in enumerate(names):
                 ax = fig.add_subplot(gs[r, c])
                 entry = cache[name]
@@ -1040,7 +1042,7 @@ def plot_global_error_frequency_spectrum(*, datasets: dict[str, pd.DataFrame]) -
 
         for path in df_i["npz_path"]:
             data = np.load(path)
-            err = data["err"][0]
+            err = data["err"]
 
             # combine all channels into a single error magnitude field
             field = np.linalg.norm(err, axis=0)

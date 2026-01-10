@@ -1,15 +1,8 @@
 """
 Error sensitivity analysis for PINO/FNO evaluation.
 
-3.1  Parameter-error correlation — HEATMAP
-
-Design rules:
-- Channel selector affects ONLY:
-    - which per-channel error is used
-    - title / focus information
-- ALL par_* columns are used (no hardcoding)
-- Per-channel errors are computed explicitly from NPZ files
-- No heuristics, no guessing
+This module provides functions to analyze and visualize the sensitivity
+of model errors to various input parameters using evaluation datasets.
 """
 
 from __future__ import annotations
@@ -26,6 +19,7 @@ from src import util
 
 if TYPE_CHECKING:
     import ipywidgets as widgets
+    from matplotlib.axes import Axes
     from matplotlib.figure import Figure
 
 
@@ -108,7 +102,30 @@ def _rel_l2(err: np.ndarray, gt: np.ndarray) -> float:
 
 
 # =============================================================================
-# 3.1 PARAMETER-ERROR CORRELATION — HEATMAP (ALL CHANNELS)
+# PARAMETER COLUMN CHECK
+# =============================================================================
+
+
+def _is_parameter_column(c: str) -> bool:
+    """
+    Check if a column name corresponds to a parameter.
+
+    Parameters
+    ----------
+    c : str
+        Column name.
+
+    Returns
+    -------
+    bool
+        True if it is a parameter column, False otherwise.
+
+    """
+    return c.startswith("par_") or (c.startswith("generator_") and "_parameters_" in c)
+
+
+# =============================================================================
+# 4.1 PARAMETER-ERROR CORRELATION — HEATMAP (ALL CHANNELS)
 # =============================================================================
 
 
@@ -152,7 +169,7 @@ def plot_parameter_error_heatmap(*, datasets: dict[str, pd.DataFrame]) -> widget
         # --------------------------------------------------
         # common parameter columns
         # --------------------------------------------------
-        par_cols = sorted(set.intersection(*[{c for c in df.columns if c.startswith("par_") and c != "par_seed"} for df in datasets.values()]))
+        par_cols = sorted(set.intersection(*[{c for c in df.columns if _is_parameter_column(c)} for df in datasets.values()]))
 
         if not par_cols:
             msg = "No common par_* columns found across datasets."
@@ -205,9 +222,10 @@ def plot_parameter_error_heatmap(*, datasets: dict[str, pd.DataFrame]) -> widget
         fig, axes = plt.subplots(
             1,
             n,
-            figsize=(n * (1.4 * len(CHANNELS) + 2), 0.25 * len(par_cols) + 2),
+            figsize=(n * (1.25 * len(CHANNELS) + 2), 0.25 * len(par_cols) + 2),
             squeeze=False,
             constrained_layout=True,
+            sharey=True,
         )
 
         for ax, (name, corr) in zip(axes[0], corrs.items(), strict=False):
@@ -245,11 +263,11 @@ def plot_parameter_error_heatmap(*, datasets: dict[str, pd.DataFrame]) -> widget
 
 
 # =============================================================================
-# 3.2 PARAMETER-ERROR TREND (SORTED BY EFFECT, TOP-K, PER DATASET)
+# 4.2 PARAMETER-ERROR TREND (SORTED BY EFFECT, TOP-K, PER DATASET)
 # =============================================================================
 
 
-def plot_error_vs_parameter_trend(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
+def plot_error_vs_parameter_trend(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:  # noqa: C901
     """
     Parameter-error trend plots.
 
@@ -268,7 +286,7 @@ def plot_error_vs_parameter_trend(*, datasets: dict[str, pd.DataFrame]) -> widge
     # parameter columns (ORDER AS IN DF)
     # --------------------------------------------------
     first_df = next(iter(datasets.values()))
-    par_cols = [c for c in first_df.columns if c.startswith("par_") and c != "par_seed"]
+    par_cols = [c for c in first_df.columns if _is_parameter_column(c)]
     if not par_cols:
         msg = "No par_* columns found."
         raise ValueError(msg)
@@ -402,12 +420,22 @@ def plot_error_vs_parameter_trend(*, datasets: dict[str, pd.DataFrame]) -> widge
             wspace=0.35,
         )
 
-        axes = [fig.add_subplot(gs[0, i]) for i in range(len(names))]
+        # --------------------------------------------------
+        # create axes with shared y-axis
+        # --------------------------------------------------
+        axes: list[Axes] = []
+        for i in range(len(names)):
+            ax = fig.add_subplot(gs[0, i]) if i == 0 else fig.add_subplot(gs[0, i], sharey=axes[0])
+            axes.append(ax)
+
         ax_legend = fig.add_subplot(gs[0, -1])
         ax_legend.axis("off")
 
         legend_handles = []
 
+        # --------------------------------------------------
+        # plot data
+        # --------------------------------------------------
         for ax, name in zip(axes, names, strict=False):
             for ch in active_channels:
                 xs_plot = []
@@ -430,13 +458,24 @@ def plot_error_vs_parameter_trend(*, datasets: dict[str, pd.DataFrame]) -> widge
                     legend_handles.append(line)
 
             ax.set_yticks(y_pos)
-            ax.set_yticklabels(shown_params)
-            ax.invert_yaxis()
             ax.set_xscale("log")
             ax.set_xlabel("Sensitivity on rel_l2 (P90 minus P10 of binned medians, log scale)")
             ax.set_title(f"Dataset: {name}")
             ax.grid(True, which="both", axis="x", alpha=0.3)
 
+        # --------------------------------------------------
+        # y-axis labels: set ONCE, then hide on others
+        # --------------------------------------------------
+        axes[0].set_yticklabels(shown_params)
+        axes[0].tick_params(axis="y", labelleft=True)
+
+        for ax in axes[1:]:
+            ax.tick_params(axis="y", labelleft=False)
+        axes[0].invert_yaxis()
+
+        # --------------------------------------------------
+        # legend + layout
+        # --------------------------------------------------
         ax_legend.legend(
             legend_handles,
             active_channels,
@@ -448,12 +487,14 @@ def plot_error_vs_parameter_trend(*, datasets: dict[str, pd.DataFrame]) -> widge
             "Parameter sensitivity (original parameter order)",
             fontsize=14,
         )
+
         fig.subplots_adjust(
-            top=0.90,
+            top=0.95,
             bottom=0.08,
-            left=0.08,
+            left=0.35,
             right=0.96,
         )
+
         return fig
 
     channel_selector = util.util_plot_components.ui_checkbox_channels(

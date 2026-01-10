@@ -18,11 +18,9 @@ produce misleading artefacts. This is standard practice in CFD and operator-
 learning visualization.
 
 Supported kappa aggregation logic:
-    • 1 component       → return it directly
-    • 2 diagonals       → mean(kxx, kyy)
-    • 4 components      → (kxx + kyy) / 2
-    • 9 components      → (kxx + kyy + kzz) / 3
-    • fallback          → mean across all components
+    • Schema-driven diagonal aggregation (kxx, kyy, kzz)
+    • Single-component passthrough
+    • Explicit mean over provided components (visualisation only)
 """
 
 from __future__ import annotations
@@ -34,12 +32,24 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from src import util
+from src.schema.schema_fields import OUTPUT_FIELDS
 
 if TYPE_CHECKING:
     import ipywidgets as widgets
     import pandas as pd
     from matplotlib.figure import Figure
 
+# =============================================================================
+# CHANNELS AND UNITS
+# =============================================================================
+CHANNELS = OUTPUT_FIELDS
+CHANNEL_INDICES = {name: i for i, name in enumerate(CHANNELS)}
+UNIT_MAP = {
+    "p": "Pa",
+    "u": "m/s",
+    "v": "m/s",
+    "U": "m/s",
+}
 
 # =============================================================================
 # NPZ LOADING
@@ -74,11 +84,11 @@ def _load_npz(row: pd.Series) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.nd
         return _npz_cache[key]
 
     data = np.load(key, allow_pickle=True)
-    pred = data["pred"][0]
-    gt = data["gt"][0]
-    err = data["err"][0]
-    kappa = data["kappa"][0]
-    kappa_names = list(data["kappa_names"])
+    pred = np.asarray(data["pred"])
+    gt = np.asarray(data["gt"])
+    err = np.asarray(data["err"])
+    kappa = np.asarray(data["kappa"])
+    kappa_names = [str(n) for n in data["kappa_names"]]
 
     _npz_cache[key] = (pred, gt, err, kappa, kappa_names)
     return pred, gt, err, kappa, kappa_names
@@ -89,48 +99,48 @@ def _load_npz(row: pd.Series) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.nd
 # =============================================================================
 
 
-def _aggregate_kappa(kappa: np.ndarray, names: list[str]) -> np.ndarray:
+def _aggregate_kappa(kappa: np.ndarray, kappa_names: list[str]) -> np.ndarray:
     """
-    Construct a scalar permeability field from arbitrary tensor components.
+    Aggregate permeability tensor to a scalar field using schema-based indexing.
 
     Parameters
     ----------
     kappa : np.ndarray
-        Tensor components of shape (K, H, W).
-    names : list[str]
-        Component names such as ['kappaxx', 'kappayy', ...].
+        Permeability tensor components of shape (C, H, W).
+    kappa_names : list[str]
+        Component names for the permeability tensor.
 
     Returns
     -------
     np.ndarray
-        Scalar permeability field of shape (H, W).
+        Aggregated permeability field of shape (H, W).
 
     """
-    K = kappa.shape[0]
-    name_to_idx = {name.lower(): i for i, name in enumerate(names)}
+    idx = {name: i for i, name in enumerate(kappa_names)}
 
-    diag_keys = ["kappaxx", "kappayy", "kappazz"]
-    diag_indices = [name_to_idx[k] for k in diag_keys if k in name_to_idx]
+    # ------------------------------------------------------------------
+    # Diagonal-only cases (explicit, schema-driven)
+    # ------------------------------------------------------------------
+    if {"kxx", "kyy", "kzz"}.issubset(idx):
+        return (kappa[idx["kxx"]] + kappa[idx["kyy"]] + kappa[idx["kzz"]]) / 3.0
 
-    if K == 1:
-        return kappa[0]
+    if {"kxx", "kyy"}.issubset(idx):
+        return 0.5 * (kappa[idx["kxx"]] + kappa[idx["kyy"]])
 
-    if K == 2 and len(diag_indices) == 2:  # noqa: PLR2004
-        ixx, iyy = diag_indices
-        return (kappa[ixx] + kappa[iyy]) / 2.0
+    # ------------------------------------------------------------------
+    # Single component (e.g. isotropic kappa)
+    # ------------------------------------------------------------------
+    if len(idx) == 1:
+        return kappa[next(iter(idx.values()))]
 
-    if K == 4 and len(diag_indices) >= 2:  # noqa: PLR2004
-        ixx = name_to_idx.get("kappaxx", diag_indices[0])
-        iyy = name_to_idx.get("kappayy", diag_indices[1])
-        return (kappa[ixx] + kappa[iyy]) / 2.0
-
-    if K == 9 and len(diag_indices) == 3:  # noqa: PLR2004
-        ixx = name_to_idx["kappaxx"]
-        iyy = name_to_idx["kappayy"]
-        izz = name_to_idx["kappazz"]
-        return (kappa[ixx] + kappa[iyy] + kappa[izz]) / 3.0
-
-    return kappa.mean(axis=0)
+    # ------------------------------------------------------------------
+    # Fallback: explicit mean over provided components
+    # (visualisation only, no physics implied)
+    # ------------------------------------------------------------------
+    return np.mean(
+        np.stack([kappa[i] for i in idx.values()], axis=0),
+        axis=0,
+    )
 
 
 # =============================================================================
@@ -156,9 +166,6 @@ def plot_sample_prediction_overview(*, datasets: dict[str, pd.DataFrame]) -> wid
         Interactive UI container with dropdown.
 
     """
-    channels = ["p", "u", "v", "U"]
-    unit_map = {"p": "Pa", "u": "m/s", "v": "m/s", "U": "m/s"}
-
     cmap_pred_true = "turbo"
     cmap_error = "Blues"
     cmap_kappa = "viridis"
@@ -201,8 +208,9 @@ def plot_sample_prediction_overview(*, datasets: dict[str, pd.DataFrame]) -> wid
         row = df.iloc[idx]
         pred, gt, err, kappa, kappa_names = _load_npz(row)
 
-        Lx, Ly = float(row["geom_Lx"]), float(row["geom_Ly"])
-        ny, nx = pred[0].shape
+        Lx = float(row["geometry_Lx"])
+        Ly = float(row["geometry_Ly"])
+        ny, nx = pred[CHANNEL_INDICES[CHANNELS[0]]].shape
 
         x = np.linspace(0, Lx, nx)
         y = np.linspace(0, Ly, ny)
@@ -219,24 +227,30 @@ def plot_sample_prediction_overview(*, datasets: dict[str, pd.DataFrame]) -> wid
 
         nrows = 4  # fixed layout
 
-        for r, label in enumerate(channels):
+        for r, label in enumerate(CHANNELS):
             is_last_row = r == nrows - 1
 
             # -------------------------------------------------
             # Prediction
             # -------------------------------------------------
             ax = axes[r, 0]
+            k = CHANNEL_INDICES[label]
+            field = pred[k]
+
             im = ax.contourf(
                 X,
                 Y,
-                pred[r],
-                levels=util.util_plot_components.compute_levels(pred[r], n_levels),
+                field,
+                levels=util.util_plot_components.compute_levels(field, n_levels),
                 cmap=cmap_pred_true,
             )
-            if label in {"u", "v", "U"}:
-                util.util_plot_components.overlay_streamlines(ax, X, Y, pred[1], pred[2])
 
-            ax.set_title(f"{label} pred [{unit_map[label]}]")
+            if label in {"u", "v", "U"}:
+                u = pred[CHANNEL_INDICES["u"]]
+                v = pred[CHANNEL_INDICES["v"]]
+                util.util_plot_components.overlay_streamlines(ax, X, Y, u, v)
+
+            ax.set_title(f"{label} pred [{UNIT_MAP[label]}]")
             cb = fig.colorbar(im, ax=ax, fraction=0.04)
             cb.ax.yaxis.set_major_formatter(util.util_plot_components.choose_colorbar_formatter(*im.get_clim()))
             util.util_plot_components.apply_axis_labels(ax, 0, Lx, Ly, is_last_row=is_last_row)
@@ -245,17 +259,23 @@ def plot_sample_prediction_overview(*, datasets: dict[str, pd.DataFrame]) -> wid
             # Ground truth
             # -------------------------------------------------
             ax = axes[r, 1]
+            k = CHANNEL_INDICES[label]
+            field = gt[k]
+
             im = ax.contourf(
                 X,
                 Y,
-                gt[r],
-                levels=util.util_plot_components.compute_levels(gt[r], n_levels),
+                field,
+                levels=util.util_plot_components.compute_levels(field, n_levels),
                 cmap=cmap_pred_true,
             )
-            if label in {"u", "v", "U"}:
-                util.util_plot_components.overlay_streamlines(ax, X, Y, gt[1], gt[2])
 
-            ax.set_title(f"{label} true [{unit_map[label]}]")
+            if label in {"u", "v", "U"}:
+                u = gt[CHANNEL_INDICES["u"]]
+                v = gt[CHANNEL_INDICES["v"]]
+                util.util_plot_components.overlay_streamlines(ax, X, Y, u, v)
+
+            ax.set_title(f"{label} true [{UNIT_MAP[label]}]")
             cb = fig.colorbar(im, ax=ax, fraction=0.04)
             cb.ax.yaxis.set_major_formatter(util.util_plot_components.choose_colorbar_formatter(*im.get_clim()))
             util.util_plot_components.apply_axis_labels(ax, 1, Lx, Ly, is_last_row=is_last_row)
@@ -265,13 +285,16 @@ def plot_sample_prediction_overview(*, datasets: dict[str, pd.DataFrame]) -> wid
             # -------------------------------------------------
             ax = axes[r, 2]
             if error_mode.value == "MAE":
-                err_field = np.abs(err[r])
+                k = CHANNEL_INDICES[label]
+                err_field = np.abs(err[k])
+                true_abs = np.abs(gt[k])
                 err_field = np.nan_to_num(err_field, nan=0.0)
                 levels_err = np.linspace(0.0, np.nanquantile(err_field, 0.99), n_levels)
-                err_title = f"{label} MAE [{unit_map[label]}]"
+                err_title = f"{label} MAE [{UNIT_MAP[label]}]"
             else:
-                abs_err = np.abs(err[r])
-                true_abs = np.abs(gt[r])
+                k = CHANNEL_INDICES[label]
+                abs_err = np.abs(err[k])
+                true_abs = np.abs(gt[k])
                 err_field = abs_err / (true_abs + 1e-12) * 100.0
                 err_field[true_abs < mask_threshold] = np.nan
                 levels_err = np.linspace(0.0, np.nanquantile(err_field, 0.99), n_levels)
@@ -351,9 +374,6 @@ def plot_sample_kappa_tensor_with_overlay(*, datasets: dict[str, pd.DataFrame]) 
         Interactive UI container with navigation and selectors.
 
     """
-    channels = ["p", "u", "v", "U"]
-    unit_map = {"p": "Pa", "u": "m/s", "v": "m/s", "U": "m/s"}
-
     cmap_kappa = "viridis"
     cmap_error = "Reds"
     n_kappa_levels = 10
@@ -431,7 +451,8 @@ def plot_sample_kappa_tensor_with_overlay(*, datasets: dict[str, pd.DataFrame]) 
         row = df.iloc[idx]
         _, gt, err, kappa, kappa_names = _load_npz(row)
 
-        Lx, Ly = float(row["geom_Lx"]), float(row["geom_Ly"])
+        Lx = float(row["geometry_Lx"])
+        Ly = float(row["geometry_Ly"])
         ny, nx = kappa.shape[1:]
 
         x = np.linspace(0, Lx, nx)
@@ -439,20 +460,38 @@ def plot_sample_kappa_tensor_with_overlay(*, datasets: dict[str, pd.DataFrame]) 
         X, Y = np.meshgrid(x, y)
 
         channel_name = channel.value
-        channel_idx = channels.index(channel_name)
 
         err_field = _compute_error_field(
             err=err,
             gt=gt,
-            channel_idx=channel_idx,
+            channel_idx=CHANNEL_INDICES[channel_name],
             mode=error_mode.value,
         )
 
         # --------------------------------------------------
+        # Fixed 2x2 symmetric tensor layout (kxy = kyx)
+        # --------------------------------------------------
+        tensor_layout = [
+            ("kxx", "kxx"),
+            ("kxy", "kxy"),
+            ("kyx", "kxy"),  # explicit symmetry
+            ("kyy", "kyy"),
+        ]
+
+        # --------------------------------------------------
         # Kappa components (only existing ones)
         # --------------------------------------------------
-        name_to_idx = {n.lower(): i for i, n in enumerate(kappa_names)}
-        comps = [(name, kappa[i]) for name, i in name_to_idx.items()]
+        name_to_idx = {name: i for i, name in enumerate(kappa_names)}
+
+        comps = []
+        for display_name, source_name in tensor_layout:
+            if source_name in name_to_idx:
+                comps.append((display_name, kappa[name_to_idx[source_name]]))
+        while len(comps) < 4:  # noqa: PLR2004
+            comps.append(("", np.full_like(kappa[0], np.nan)))
+
+        # fixed 2x2 layout
+        nrows, ncols = 2, 2
 
         # Apply kappa scaling
         if kappa_scale.value == "log10(kappa)":
@@ -460,10 +499,6 @@ def plot_sample_kappa_tensor_with_overlay(*, datasets: dict[str, pd.DataFrame]) 
             kappa_unit = "log10(m²)"
         else:
             kappa_unit = "m²"
-
-        n_comp = len(comps)
-        ncols = int(np.ceil(np.sqrt(n_comp)))
-        nrows = int(np.ceil(n_comp / ncols))
 
         fig, axes = plt.subplots(
             nrows,
@@ -532,6 +567,7 @@ def plot_sample_kappa_tensor_with_overlay(*, datasets: dict[str, pd.DataFrame]) 
         # Right column: channel GT + error contours
         # --------------------------------------------------
         ax_gt = axes[0, -1]
+        channel_idx = CHANNEL_INDICES[channel_name]
         gt_levels = util.util_plot_components.compute_levels(gt[channel_idx], n_kappa_levels)
 
         im = ax_gt.contourf(
@@ -552,7 +588,7 @@ def plot_sample_kappa_tensor_with_overlay(*, datasets: dict[str, pd.DataFrame]) 
                 linewidths=1.0,
             )
 
-        ax_gt.set_title(f"{channel_name} true [{unit_map[channel_name]}]")
+        ax_gt.set_title(f"{channel_name} true [{UNIT_MAP[channel_name]}]")
 
         cb = fig.colorbar(im, ax=ax_gt, fraction=0.045)
         formatter = util.util_plot_components.choose_colorbar_formatter(*im.get_clim())
@@ -576,7 +612,7 @@ def plot_sample_kappa_tensor_with_overlay(*, datasets: dict[str, pd.DataFrame]) 
                 X,
                 Y,
                 err_field,
-                levels=err_levels if len(err_levels) > 0 else util.util_plot_components.compute_levels(err_field),
+                levels=util.util_plot_components.compute_levels(err_field),
                 cmap=cmap_error,
             )
 
