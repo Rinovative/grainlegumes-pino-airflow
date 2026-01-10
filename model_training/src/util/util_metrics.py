@@ -420,6 +420,68 @@ class RMSEOverall(nn.Module):
 
 
 # ============================================================================
+# Channel-wise RMSE in PHYSICAL units
+# ============================================================================
+
+
+class RMSEChannelPhysical(nn.Module):
+    """
+    Compute the RMSE for a specific output channel in physical units.
+
+    This metric denormalizes both predictions and targets using the provided
+    normalizer before computing the RMSE for the selected channel.
+
+    Args:
+        channel: Index of the output channel to evaluate.
+        out_normalizer: Normalizer with an `inverse_transform` method
+                        to denormalize model outputs.
+
+    Returns:
+        torch.Tensor: Scalar RMSE value for the specified channel.
+
+    """
+
+    def __init__(self, channel: int, out_normalizer: Any) -> None:
+        """
+        Initialize the channel-wise physical RMSE metric.
+
+        Args:
+            channel: Index of the output channel to evaluate.
+            out_normalizer: Normalizer with an `inverse_transform` method
+                            to denormalize model outputs.
+
+        """
+        super().__init__()
+        self.channel = channel
+        self.out_normalizer = out_normalizer
+
+    def forward(
+        self,
+        pred: torch.Tensor,
+        y: torch.Tensor,
+        **kwargs: torch.Tensor,  # noqa: ARG002
+    ) -> torch.Tensor:
+        """
+        Compute the RMSE for the selected channel in physical units.
+
+        Args:
+            pred: Predicted tensor of shape (batch, C, H, W).
+            y: Ground truth tensor with identical shape.
+            **kwargs: Ignored additional arguments forwarded by Trainer.
+
+        Returns:
+            torch.Tensor: Scalar RMSE value for the channel.
+
+        """
+        # Denormalize predictions and targets
+        pred_phys = self.out_normalizer.inverse_transform(pred)
+        y_phys = self.out_normalizer.inverse_transform(y)
+
+        diff = pred_phys[:, self.channel] - y_phys[:, self.channel]
+        return torch.sqrt(torch.mean(diff * diff))
+
+
+# ============================================================================
 # Channel-wise relative RMSE (percent)
 # ============================================================================
 

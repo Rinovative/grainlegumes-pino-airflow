@@ -1,7 +1,7 @@
 """
-Model training script for Physiks-Informed Fourier Neural Operator (PI-FNO).
+Model training script for Physics-Informed Fourier Neural Operator (PI-FNO).
 
-This script sets up the FNO model, optimizer, scheduler, physiks-informed loss functions,
+This script sets up the FNO model, optimizer, scheduler, physics-informed loss functions,
 and launches the training process using the base training function.
 """
 
@@ -10,11 +10,16 @@ from neuralop import H1Loss, LpLoss
 from neuralop.layers.spectral_convolution import SpectralConv
 from neuralop.models import FNO
 from neuralop.training import AdamW
-from src.util.util_metrics import RelRMSEChannel, RMSEOverall
+from src.util.util_metrics import RMSEOverall
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from training.tools.pino_loss import PINOLoss
 from training.tools.spectral_hook import SpectralEnergyHook
 from training.train_base import train_base
+
+# ================================================================
+# 0) Change Architecture
+# ================================================================
+SMALL = False
 
 # ================================================================
 # ⚙️ 1) Base configuration
@@ -25,21 +30,22 @@ CONFIG = {
     "seed": 9,
     "device": "cuda" if torch.cuda.is_available() else "cpu",
     # --- Physics-informed training ---
-    "lambda_phys": 1e-2,
+    "lambda_phys": 1e-3,
+    "lambda_p": 5e-3,
     # --- Spectral diagnostics ---
-    "enable_spectral_hooks": False,
+    "enable_spectral_hooks": True,
     # --- Dataset ---
     "train_dataset_name": "lhs_var80_seed3001",
-    "ood_dataset_name": "lhs_var160_seed4001",
+    "ood_dataset_name": "lhs_var120_seed4001",
     "train_ratio": 0.8,  # fraction of dataset used for training
     "ood_fraction": 0.2,  # fraction of OOD data for evaluation
     # --- Dataloader ---
-    "batch_size": 32,
+    "batch_size": 32 if SMALL else 16,
     "num_workers": 8,
     "pin_memory": True,
     "persistent_workers": True,
     # --- Training ---
-    "n_epochs": 1000,
+    "n_epochs": 1_000 if SMALL else 1_500,
     "eval_interval": 5,  # evaluate every N epochs
     "mixed_precision": False,  # enables AMP on modern GPUs
     # --- Checkpointing & Resume ---
@@ -47,6 +53,7 @@ CONFIG = {
     # "resume_from_dir": "latest",
     # --- Logging ---
     "save_best": "eval_overall_rmse",  # metric key to monitor for best checkpoint
+    "log_physical_rmse": True,  # log RMSE in physical units for each channel
     "save_every": None,  # optional periodic checkpoint saving
 }
 
@@ -54,13 +61,24 @@ CONFIG = {
 # ================================================================
 # 🧠 2) Model, hooks, optimizer, scheduler, and losses
 # ================================================================
-# --- Model ---
-model = FNO(
-    n_modes=(12, 12),
-    hidden_channels=24,
-    in_channels=7,
-    out_channels=3,
-).to(CONFIG["device"])
+if SMALL:
+    # --- Model small ---
+    model = FNO(
+        n_modes=(12, 12),
+        hidden_channels=24,
+        in_channels=7,
+        out_channels=3,
+        n_layers=4,
+    ).to(CONFIG["device"])
+else:
+    # --- Model big ---
+    model = FNO(
+        n_modes=(24, 24),
+        hidden_channels=96,
+        in_channels=7,
+        out_channels=3,
+        n_layers=6,
+    ).to(CONFIG["device"])
 
 
 # 🏷️ --- Model naming ---
@@ -69,7 +87,8 @@ parts: list[str] = [
     f"m{model.n_modes[0]}x{model.n_modes[1]}",
     f"h{model.hidden_channels}",
     f"l{model.n_layers}",
-    f"lam{CONFIG['lambda_phys']:.0e}",
+    f"lamPhys{CONFIG['lambda_phys']:.0e}",
+    f"lamP{CONFIG['lambda_p']:.0e}",
     str(CONFIG["train_dataset_name"]),
 ]
 
@@ -87,12 +106,20 @@ if CONFIG.get("enable_spectral_hooks", False):
         if isinstance(module, SpectralConv):
             module.register_forward_hook(spectral_hook.hook)
 
-# --- Optimizer ---
-optimizer = AdamW(
-    model.parameters(),
-    lr=1e-2,
-    weight_decay=1e-4,
-)
+if SMALL:  # noqa: SIM108
+    # --- Optimizer model small ---
+    optimizer = AdamW(
+        model.parameters(),
+        lr=1e-2,
+        weight_decay=1e-4,
+    )
+else:
+    # --- Optimizer model big ---
+    optimizer = AdamW(
+        model.parameters(),
+        lr=5e-3,
+        weight_decay=1e-4,
+    )
 
 # --- Scheduler ---
 scheduler = ReduceLROnPlateau(
@@ -107,14 +134,14 @@ scheduler = ReduceLROnPlateau(
 train_loss = PINOLoss(
     data_loss=H1Loss(d=2),
     lambda_phys=CONFIG["lambda_phys"],
+    lambda_p=CONFIG["lambda_p"],
+    in_normalizer=None,
+    out_normalizer=None,
 )
 eval_losses = {
     "h1": H1Loss(d=2),
     "l2": LpLoss(d=2, p=2),
     "overall_rmse": RMSEOverall(),
-    "rel_rmse_p": RelRMSEChannel(0),
-    "rel_rmse_u": RelRMSEChannel(1),
-    "rel_rmse_v": RelRMSEChannel(2),
 }
 
 
