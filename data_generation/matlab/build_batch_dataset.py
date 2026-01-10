@@ -129,29 +129,31 @@ def build_batch_dataset(batch_name: str, verbose: bool = False) -> dict:  # noqa
     # ------------------------------------------------------------------
     # Paths
     # ------------------------------------------------------------------
+    PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-    # proj_root = Path(__file__).resolve().parents[2]
-    # gen_data_dir = proj_root / "data_generation" / "data"
+    DATA_GENERATION = PROJECT_ROOT / "data_generation" / "data"
+    DATA_RAW = PROJECT_ROOT / "data" / "raw"
 
-    # proc_dir = gen_data_dir / "processed" / batch_name
-    # raw_dir = gen_data_dir / "raw" / batch_name
-    # meta_dir = gen_data_dir / "meta"
-
-    # out_root = proj_root / "data" / "raw"
-    # out_batch = out_root / batch_name
-
+    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
+    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
+    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
+    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
     import os
 
-    DATA_ROOT = Path(os.environ.get("TMP_DATA_ROOT", "/home/rino.albertin/tmp_data"))
+    DATA_ROOT = Path(os.environ.get("TMP_DATA_ROOT", "/home/rino.albertin/workspace/tmp_data"))
 
-    gen_data_dir = DATA_ROOT / "data_generation"
+    DATA_GENERATION = DATA_ROOT / "temp_data_generation"
+    DATA_RAW = DATA_ROOT / "temp_data" / "temp_raw"
+    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
+    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
+    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
+    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
 
-    proc_dir = gen_data_dir / "processed" / batch_name
-    raw_dir = gen_data_dir / "raw" / batch_name
-    meta_dir = gen_data_dir / "meta"
+    proc_dir = DATA_GENERATION / "processed" / batch_name
+    raw_dir = DATA_GENERATION / "raw" / batch_name
+    meta_dir = DATA_GENERATION / "meta"
+    out_batch = DATA_RAW / batch_name
 
-    out_root = DATA_ROOT / "data" / "raw"
-    out_batch = out_root / batch_name
     cases_dir = out_batch / "cases"
     cases_dir.mkdir(parents=True, exist_ok=True)
 

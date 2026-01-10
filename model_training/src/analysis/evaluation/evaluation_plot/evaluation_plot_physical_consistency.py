@@ -576,7 +576,6 @@ def plot_pressure_bc_consistency(*, datasets: dict[str, pd.DataFrame]) -> widget
             (line,) = ax.plot(s, y, lw=2)
             legend_handles.append(line)
 
-        ax.set_xscale("log")
         ax.set_xlabel("|p_pred(inlet) - p_bc|")
         ax.set_ylabel("CDF")
         ax.set_title("Pressure boundary consistency")

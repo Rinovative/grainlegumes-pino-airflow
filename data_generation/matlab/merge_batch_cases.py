@@ -63,32 +63,39 @@ def merge_batch_cases(
         Summary information including dataset path and shapes.
 
     """
-    # log = []
-
-    # matlab_dir = Path(__file__).resolve().parent
-    # base_root = matlab_dir.parents[1]
-
-    # src_batch = base_root / "data" / "raw" / batch_name
-    # cases_dir = src_batch / "cases"
-    # src_meta = src_batch / "meta.pt"
-
-    # dst_batch_dir = base_root / "model_training" / "data" / "raw" / batch_name
-    # dst_batch_dir.mkdir(parents=True, exist_ok=True)
-
     log = []
 
-    import os
+    # ------------------------------------------------------------------
+    # Project root (grainlegumes-pino)
+    # ------------------------------------------------------------------
+    PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-    matlab_dir = Path(__file__).resolve().parent
-    project_root = matlab_dir.parents[1]
+    # ------------------------------------------------------------------
+    # Data roots (default = repo layout)
+    # ------------------------------------------------------------------
+    DATA_RAW = PROJECT_ROOT / "data" / "raw"
+    MODEL_DATA_RAW = PROJECT_ROOT / "model_training" / "data" / "raw"
 
-    DATA_ROOT = Path(os.environ.get("TMP_DATA_ROOT", project_root))
+    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
+    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
+    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
+    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
+    TMP_ROOT = Path("/home/rino.albertin/workspace/tmp_data")
+    DATA_RAW = TMP_ROOT / "temp_data" / "temp_raw"
+    MODEL_DATA_RAW = TMP_ROOT / "temp_data_training" / "temp_data" / "temp_raw"
+    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
+    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
+    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
+    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
 
-    src_batch = DATA_ROOT / "data" / "raw" / batch_name
+    # ------------------------------------------------------------------
+    # Batch paths
+    # ------------------------------------------------------------------
+    src_batch = DATA_RAW / batch_name
     cases_dir = src_batch / "cases"
     src_meta = src_batch / "meta.pt"
 
-    dst_batch_dir = DATA_ROOT / "model_training" / "data" / "raw" / batch_name
+    dst_batch_dir = MODEL_DATA_RAW / batch_name
     dst_batch_dir.mkdir(parents=True, exist_ok=True)
 
     dst_data_path = dst_batch_dir / f"{batch_name}.pt"
@@ -229,6 +236,6 @@ def merge_batch_cases(
 
 
 if __name__ == "__main__":
-    result = merge_batch_cases("lhs_var80_seed3001", verbose=True)
+    result = merge_batch_cases("lhs_var160_seed5001", verbose=True)
     for line in result["log"]:
         print(line)
