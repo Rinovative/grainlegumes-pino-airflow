@@ -32,6 +32,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from src.schema.schema_training import default_training_inputs, default_training_outputs
 from tqdm import tqdm
 
 
@@ -62,21 +63,32 @@ def merge_batch_cases(
         Summary information including dataset path and shapes.
 
     """
-    if keep_input_fields is None:
-        keep_input_fields = ["x", "y", "kappaxx", "kappayy", "kappaxy", "phi", "p_bc"]
-    if keep_output_fields is None:
-        keep_output_fields = ["p", "u", "v"]
+    # log = []
+
+    # matlab_dir = Path(__file__).resolve().parent
+    # base_root = matlab_dir.parents[1]
+
+    # src_batch = base_root / "data" / "raw" / batch_name
+    # cases_dir = src_batch / "cases"
+    # src_meta = src_batch / "meta.pt"
+
+    # dst_batch_dir = base_root / "model_training" / "data" / "raw" / batch_name
+    # dst_batch_dir.mkdir(parents=True, exist_ok=True)
 
     log = []
 
-    matlab_dir = Path(__file__).resolve().parent
-    base_root = matlab_dir.parents[1]
+    import os
 
-    src_batch = base_root / "data" / "raw" / batch_name
+    matlab_dir = Path(__file__).resolve().parent
+    project_root = matlab_dir.parents[1]
+
+    DATA_ROOT = Path(os.environ.get("TMP_DATA_ROOT", project_root))
+
+    src_batch = DATA_ROOT / "data" / "raw" / batch_name
     cases_dir = src_batch / "cases"
     src_meta = src_batch / "meta.pt"
 
-    dst_batch_dir = base_root / "model_training" / "data" / "raw" / batch_name
+    dst_batch_dir = DATA_ROOT / "model_training" / "data" / "raw" / batch_name
     dst_batch_dir.mkdir(parents=True, exist_ok=True)
 
     dst_data_path = dst_batch_dir / f"{batch_name}.pt"
@@ -95,6 +107,28 @@ def merge_batch_cases(
     first_case_path = case_files[0]
     first_case = torch.load(first_case_path, map_location="cpu", weights_only=False)
 
+    # ------------------------------------------------------------------
+    # Auto-detect problem dimension from internal kappa fields
+    # ------------------------------------------------------------------
+    available_inputs = set(first_case["input_fields"].keys())
+
+    if {"kxx", "kyy", "kzz"}.issubset(available_inputs):
+        dim = 3
+    elif {"kxx", "kyy", "kxy"}.issubset(available_inputs):
+        dim = 2
+    else:
+        msg = f"Cannot determine problem dimension from input fields: {sorted(available_inputs)}"
+        raise RuntimeError(msg)
+
+    if keep_input_fields is None:
+        keep_input_fields = default_training_inputs(dim)
+
+    if keep_output_fields is None:
+        keep_output_fields = default_training_outputs(dim)
+
+    # ------------------------------------------------------------------
+    # Determine training schema (dimension + fields)
+    # ------------------------------------------------------------------
     input_fields_first = {k: v for k, v in first_case["input_fields"].items() if k in keep_input_fields}
     output_fields_first = {k: v for k, v in first_case["output_fields"].items() if k in keep_output_fields}
 

@@ -35,3 +35,4 @@ dependencies:
       - pyfftw
       - numba
       - complexipy
+      - optuna

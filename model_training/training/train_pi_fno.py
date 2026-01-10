@@ -30,7 +30,7 @@ CONFIG = {
     "seed": 9,
     "device": "cuda" if torch.cuda.is_available() else "cpu",
     # --- Physics-informed training ---
-    "lambda_phys": 1e-3,
+    "lambda_phys": 1e-3 if SMALL else 1e-4,
     "lambda_p": 5e-3,
     # --- Spectral diagnostics ---
     "enable_spectral_hooks": True,

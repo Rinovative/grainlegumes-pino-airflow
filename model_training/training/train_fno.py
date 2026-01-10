@@ -12,13 +12,9 @@ from neuralop.models import FNO
 from neuralop.training import AdamW
 from src.util.util_metrics import RMSEOverall
 from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.optimizer import Optimizer
 from training.tools.spectral_hook import SpectralEnergyHook
 from training.train_base import train_base
-
-# ================================================================
-# 0) Change Architecture
-# ================================================================
-SMALL = True
 
 # ================================================================
 # ⚙️ 1) Base configuration
@@ -36,12 +32,12 @@ CONFIG = {
     "train_ratio": 0.8,  # fraction of dataset used for training
     "ood_fraction": 0.2,  # fraction of OOD data for evaluation
     # --- Dataloader ---
-    "batch_size": 32 if SMALL else 16,
+    "batch_size": 32,
     "num_workers": 8,
     "pin_memory": True,
     "persistent_workers": True,
     # --- Training ---
-    "n_epochs": 1_000 if SMALL else 1_500,
+    "n_epochs": 1_000,
     "eval_interval": 5,  # evaluate every N epochs
     "mixed_precision": False,  # enables AMP on modern GPUs
     # --- Checkpointing & Resume ---
@@ -57,71 +53,55 @@ CONFIG = {
 # ================================================================
 # 🧠 2) Model, hooks, optimizer, scheduler, and losses
 # ================================================================
-if SMALL:
-    # --- Model small ---
-    model = FNO(
-        n_modes=(12, 12),
-        hidden_channels=24,
+def build_model(CONFIG: dict) -> FNO:
+    """Build the FNO model based on the configuration."""
+    return FNO(
+        n_modes=CONFIG.get("n_modes", (12, 12)),
+        hidden_channels=CONFIG.get("hidden_channels", 24),
         in_channels=7,
         out_channels=3,
-        n_layers=4,
-    ).to(CONFIG["device"])
-else:
-    # --- Model big ---
-    model = FNO(
-        n_modes=(24, 24),
-        hidden_channels=96,
-        in_channels=7,
-        out_channels=3,
-        n_layers=6,
+        n_layers=CONFIG.get("n_layers", 4),
     ).to(CONFIG["device"])
 
 
 # 🏷️ --- Model naming ---
-parts: list[str] = [
-    "FNO",
-    f"m{model.n_modes[0]}x{model.n_modes[1]}",
-    f"h{model.hidden_channels}",
-    f"l{model.n_layers}",
-    str(CONFIG["train_dataset_name"]),
-]
+def build_model_name(CONFIG: dict) -> str:
+    """Build a descriptive model name based on the configuration."""
+    parts = [
+        "FNO",
+        f"m{CONFIG.get('n_modes', (12, 12))[0]}x{CONFIG.get('n_modes', (12, 12))[1]}",
+        f"h{CONFIG.get('hidden_channels', 24)}",
+        f"l{CONFIG.get('n_layers', 4)}",
+        CONFIG["train_dataset_name"],
+    ]
 
-if CONFIG.get("run_suffix") is not None:
-    parts.append(str(CONFIG["run_suffix"]))
+    if CONFIG.get("run_suffix"):
+        parts.append(str(CONFIG["run_suffix"]))
 
-CONFIG["model_name"] = "_".join(parts)
+    return "_".join(parts)
 
-# --- Optional: spectral diagnostics ---
-spectral_hook = None
-if CONFIG.get("enable_spectral_hooks", False):
-    spectral_hook = SpectralEnergyHook()
-    for module in model.modules():
-        if isinstance(module, SpectralConv):
-            module.register_forward_hook(spectral_hook.hook)
 
-if SMALL:  # noqa: SIM108
-    # --- Optimizer model small ---
-    optimizer = AdamW(
+# --- Optimizer model ---
+def build_optimizer(CONFIG: dict, model: FNO) -> AdamW:
+    """Build the AdamW optimizer for the model."""
+    return AdamW(
         model.parameters(),
-        lr=1e-2,
-        weight_decay=1e-4,
+        lr=CONFIG.get("lr", 1e-2),
+        weight_decay=CONFIG.get("weight_decay", 1e-4),
     )
-else:
-    # --- Optimizer model big ---
-    optimizer = AdamW(
-        model.parameters(),
-        lr=5e-3,
-        weight_decay=1e-4,
-    )
+
 
 # --- Scheduler ---
-scheduler = ReduceLROnPlateau(
-    optimizer,
-    mode="min",  # reduce when validation loss plateaus
-    factor=0.5,  # halve learning rate
-    patience=20,  # number of evals to wait before reducing
-    min_lr=1e-5,  # do not go below this lr
-)
+def build_scheduler(optimizer: Optimizer) -> ReduceLROnPlateau:
+    """Build the ReduceLROnPlateau scheduler for the optimizer."""
+    return ReduceLROnPlateau(
+        optimizer,
+        mode="min",
+        factor=0.5,
+        patience=20,
+        min_lr=1e-5,
+    )
+
 
 # --- Losses ---
 train_loss = H1Loss(d=2)
@@ -135,4 +115,31 @@ eval_losses = {
 # ================================================================
 # 🚀 3) Launch training
 # ================================================================
-train_base(CONFIG, model, optimizer, scheduler, train_loss, eval_losses)
+def run_fno(CONFIG: dict) -> None:
+    """Run the training process for the FNO model."""
+    model = build_model(CONFIG)
+    CONFIG["model_name"] = build_model_name(CONFIG)
+
+    spectral_hook = None
+    if CONFIG.get("enable_spectral_hooks", False):
+        spectral_hook = SpectralEnergyHook()
+        for module in model.modules():
+            if isinstance(module, SpectralConv):
+                module.register_forward_hook(spectral_hook.hook)
+
+    optimizer = build_optimizer(CONFIG, model)
+    scheduler = build_scheduler(optimizer)
+
+    train_base(
+        CONFIG,
+        model,
+        optimizer,
+        scheduler,
+        train_loss,
+        eval_losses,
+        spectral_hook,
+    )
+
+
+if __name__ == "__main__":
+    run_fno(CONFIG)

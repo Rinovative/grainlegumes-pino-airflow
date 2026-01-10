@@ -20,6 +20,7 @@ import torch
 import wandb
 from neuralop import Trainer
 from src import dataset
+from src.util.util_metrics import RMSEChannelPhysical
 
 
 # ================================================================
@@ -225,15 +226,21 @@ def train_base(
     # ------------------------------------------------------------
     # Paths
     # ------------------------------------------------------------
-    data_root = Path("model_training/data/raw")
-    train_dataset = data_root / CONFIG["train_dataset_name"] / f"{CONFIG['train_dataset_name']}.pt"
-    ood_dataset = data_root / CONFIG["ood_dataset_name"] / f"{CONFIG['ood_dataset_name']}.pt"
+    DATA_ROOT = Path(os.environ.get("DATA_ROOT", Path(__file__).resolve().parents[2] / "model_training" / "data" / "raw"))
+
+    train_dataset = DATA_ROOT / CONFIG["train_dataset_name"] / f"{CONFIG['train_dataset_name']}.pt"
+    ood_dataset = DATA_ROOT / CONFIG["ood_dataset_name"] / f"{CONFIG['ood_dataset_name']}.pt"
 
     # ------------------------------------------------------------
     # Resume logic
     # ------------------------------------------------------------
     resume_from = CONFIG.get("resume_from_dir", None)  # noqa: SIM910
     base = Path("model_training/data/processed")
+
+    if CONFIG.get("optuna_study_name") is not None:
+        base = base / CONFIG["optuna_study_name"]
+
+    base.mkdir(parents=True, exist_ok=True)
 
     if resume_from:
         if resume_from == "latest":
@@ -257,7 +264,7 @@ def train_base(
     else:
         timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
         # W&B / semantic name
-        run_name = f"{CONFIG['model_name']}_{CONFIG['train_dataset_name']}"
+        run_name = f"{CONFIG['model_name']}"
         # Local save directory
         save_dir = base / f"{run_name}_{timestamp}"
         save_dir.mkdir(parents=True, exist_ok=True)
@@ -310,6 +317,27 @@ def train_base(
     # Save normalizer for inference
     normalizer_path = save_dir / "normalizer.pt"
     torch.save(data_processor.state_dict(), normalizer_path)
+
+    # ------------------------------------------------------------
+    # Inject normalizers into training loss (if supported)
+    # ------------------------------------------------------------
+    if train_loss is not None and hasattr(train_loss, "set_normalizers"):
+        train_loss.set_normalizers(
+            in_normalizer=data_processor.in_normalizer,
+            out_normalizer=data_processor.out_normalizer,
+        )
+
+    # ------------------------------------------------------------
+    # Physical RMSE metrics (logging only)
+    # ------------------------------------------------------------
+    if CONFIG.get("log_physical_rmse", False) and eval_losses is not None:
+        eval_losses.update(
+            {
+                "rmse_p_pa": RMSEChannelPhysical(0, data_processor.out_normalizer),
+                "rmse_u_ms": RMSEChannelPhysical(1, data_processor.out_normalizer),
+                "rmse_v_ms": RMSEChannelPhysical(2, data_processor.out_normalizer),
+            }
+        )
 
     # ------------------------------------------------------------
     # Trainer Setup

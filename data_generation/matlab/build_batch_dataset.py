@@ -11,10 +11,22 @@ DESCRIPTION
 Reads raw COMSOL simulation outputs and converts them into structured PyTorch
 `.pt` case files for PINO/FNO training and evaluation.
 
+Permeability tensors are handled via a central schema:
+  - Automatic detection of 2D vs 3D problems
+  - Canonical internal tensor representation
+  - Symmetric COMSOL components (e.g. kappaxy, kappayx) are averaged
+  - Diagonal components are stored in log10-space
+  - Off-diagonal components are stored in normalized, dimensionless form
+
 Each case file contains:
-    - input_fields:   x, y, kappa* tensors (log10), phi, p_bc
-    - output_fields:  p, u, v, U
-    - meta:           simulation metadata
+  - input_fields:
+      x, y,
+      kxx, kyy (, kzz),
+      kxy (, kxz, kyz),
+      phi, p_bc
+  - output_fields:
+      p, u, v, U
+  - meta:
 
 Note:
 ----
@@ -32,31 +44,14 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import torch
+from src.schema.schema_fields import COORD_FIELDS, OUTPUT_FIELDS, SCALAR_INPUT_FIELDS
+from src.schema.schema_kappa import resolve_internal_to_present_sources
 from tqdm import tqdm
 
-# ============================================================================
-# Field definitions (single source of truth)
-# ============================================================================
-
-# coordinate fields
-COORD_FIELDS = ("x", "y")
-
-# permeability tensor prefix
-KAPPA_PREFIX = "br.kappa"
-
-# scalar input fields exported as volume fields
-INPUT_SCALAR_FIELDS = {
-    "int4(x,y)": "phi",
-    "int5(x,y)": "p_bc",
-}
-
-# output fields
-OUTPUT_FIELDS = {
-    "p": "p",
-    "u": "u",
-    "v": "v",
-    "br.U": "U",
-}
+# =============================================================================
+# COMSOL name prefix
+# =============================================================================
+COMSOL_PREFIX = "br."
 
 
 def _prune_meta(meta: dict[str, Any]) -> dict[str, Any]:
@@ -134,14 +129,28 @@ def build_batch_dataset(batch_name: str, verbose: bool = False) -> dict:  # noqa
     # ------------------------------------------------------------------
     # Paths
     # ------------------------------------------------------------------
-    proj_root = Path(__file__).resolve().parents[2]
-    gen_data_dir = proj_root / "data_generation" / "data"
+
+    # proj_root = Path(__file__).resolve().parents[2]
+    # gen_data_dir = proj_root / "data_generation" / "data"
+
+    # proc_dir = gen_data_dir / "processed" / batch_name
+    # raw_dir = gen_data_dir / "raw" / batch_name
+    # meta_dir = gen_data_dir / "meta"
+
+    # out_root = proj_root / "data" / "raw"
+    # out_batch = out_root / batch_name
+
+    import os
+
+    DATA_ROOT = Path(os.environ.get("TMP_DATA_ROOT", "/home/rino.albertin/tmp_data"))
+
+    gen_data_dir = DATA_ROOT / "data_generation"
 
     proc_dir = gen_data_dir / "processed" / batch_name
     raw_dir = gen_data_dir / "raw" / batch_name
     meta_dir = gen_data_dir / "meta"
 
-    out_root = proj_root / "data" / "raw"
+    out_root = DATA_ROOT / "data" / "raw"
     out_batch = out_root / batch_name
     cases_dir = out_batch / "cases"
     cases_dir.mkdir(parents=True, exist_ok=True)
@@ -210,6 +219,8 @@ def build_batch_dataset(batch_name: str, verbose: bool = False) -> dict:  # noqa
             index_col=False,
             skip_blank_lines=True,
         )
+        df = df.copy()
+        df.columns = [c.removeprefix(COMSOL_PREFIX) for c in df.columns]
 
         return df, meta
 
@@ -217,8 +228,6 @@ def build_batch_dataset(batch_name: str, verbose: bool = False) -> dict:  # noqa
         df: pd.DataFrame,
         nx: int,
         ny: int,
-        dropped_input: list[str],
-        dropped_output: list[str],
     ) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
         """
         Build input and output fields from a case DataFrame.
@@ -231,10 +240,6 @@ def build_batch_dataset(batch_name: str, verbose: bool = False) -> dict:  # noqa
             Number of grid points in x direction.
         ny : int
             Number of grid points in y direction.
-        dropped_input : list[str]
-            List of input fields to drop.
-        dropped_output : list[str]
-            List of output fields to drop.
 
         Returns
         -------
@@ -253,54 +258,82 @@ def build_batch_dataset(batch_name: str, verbose: bool = False) -> dict:  # noqa
                 input_fields[c] = df[c].to_numpy().reshape(ny, nx)
 
         # --------------------------------------------------------------
-        # Permeability tensor
-        #   - diagonal components (xx, yy, zz): log10
-        #   - off-diagonal components (xy, yx, ...): relative scaling
+        # Permeability tensor (schema-driven, canonical representation)
+        #
+        # The permeability tensor is constructed using the central
+        # kappa schema, which defines:
+        #   - the problem dimensionality (2D vs 3D),
+        #   - the canonical internal component order,
+        #   - and the mapping from COMSOL-exported components to
+        #     internal symmetric tensor components.
+        #
+        # Symmetric COMSOL components (e.g. kappaxy, kappayx) are
+        # averaged to enforce numerical symmetry and robustness.
+        #
+        # Diagonal components are stored in log10-space.
+        # Off-diagonal components are stored in dimensionless,
+        # normalized form using sqrt(k_ii * k_jj).
         # --------------------------------------------------------------
         eps = 1e-12
 
-        # cache diagonals for normalization
-        diag = {}
-        for col in (c for c in df.columns if c.startswith(KAPPA_PREFIX)):
-            name = col.replace("br.", "")
-            ij = name[-2:]
-            if ij[0] == ij[1]:
-                diag[ij[0]] = df[col].to_numpy().reshape(ny, nx)
+        # Collect all available COMSOL permeability components
+        # (strip the COMSOL_PREFIX 'br.' to match schema naming)
+        available_kappa = [c for c in df.columns if c.startswith("kappa")]
 
-        for col in (c for c in df.columns if c.startswith(KAPPA_PREFIX)):
-            name = col.replace("br.", "")
-            if name in dropped_input:
-                continue
+        # Determine which kappa components are physically non-zero
+        KAPPA_ZERO_TOL = 1e-14
 
-            raw = df[col].to_numpy().reshape(ny, nx)
-            ij = name[-2:]
+        nonzero_kappa = []
+        for name in available_kappa:
+            field = df[name].to_numpy()
+            if np.any(np.abs(field) > KAPPA_ZERO_TOL):
+                nonzero_kappa.append(name)
 
-            if ij[0] == ij[1]:
-                # diagonal
-                input_fields[name] = np.log10(raw + eps)
+        # Let the schema decide:
+        # - dimensionality (2D vs 3D)
+        # - canonical internal component order
+        # - mapping from internal components to COMSOL sources
+        kappa_mapping = resolve_internal_to_present_sources(available_kappa, nonzero_kappa)
+
+        if not kappa_mapping:
+            msg = "No permeability components found in dataset"
+            raise RuntimeError(msg)
+
+        for internal_name, source_fields in kappa_mapping.items():
+            # Load all COMSOL source fields contributing to this internal component
+            tensors = [df[src].to_numpy().reshape(ny, nx) for src in source_fields]
+
+            # Average symmetric components if multiple sources are present
+            raw = sum(tensors) / len(tensors)
+
+            if internal_name in ("kxx", "kyy", "kzz"):
+                # Diagonal components: stored in log10-space
+                input_fields[internal_name] = np.log10(raw + eps)
             else:
-                # off-diagonal: relative scaling
-                kii = diag.get(ij[0])
-                kjj = diag.get(ij[1])
-                if kii is None or kjj is None:
-                    # fallback (should not happen if tensor is complete)
-                    input_fields[name] = raw
-                else:
-                    input_fields[name] = raw / np.sqrt(kii * kjj + eps)
+                # Off-diagonal components: dimensionless, normalized by
+                # sqrt(k_ii * k_jj) to ensure scale consistency
+                i, j = internal_name[1], internal_name[2]
+                kii = input_fields[f"k{i}{i}"]
+                kjj = input_fields[f"k{j}{j}"]
+                input_fields[internal_name] = raw / np.sqrt(10**kii * 10**kjj + eps)
 
         # --------------------------------------------------------------
         # Scalar input fields (phi, p_bc)
         # --------------------------------------------------------------
-        for csv_name, field_name in INPUT_SCALAR_FIELDS.items():
-            if csv_name in df.columns:
-                input_fields[field_name] = df[csv_name].to_numpy().reshape(ny, nx)
+        for internal, col in SCALAR_INPUT_FIELDS.items():
+            if col not in df.columns:
+                msg = f"Missing required input field '{col}'"
+                raise KeyError(msg)
+            input_fields[internal] = df[col].to_numpy().reshape(ny, nx)
 
         # --------------------------------------------------------------
         # Outputs
         # --------------------------------------------------------------
-        for csv_name, field_name in OUTPUT_FIELDS.items():
-            if csv_name in df.columns and field_name not in dropped_output:
-                output_fields[field_name] = df[csv_name].to_numpy().reshape(ny, nx)
+        for name in OUTPUT_FIELDS:
+            if name not in df.columns:
+                msg = f"Missing required output field '{name}'"
+                raise KeyError(msg)
+            output_fields[name] = df[name].to_numpy().reshape(ny, nx)
 
         return input_fields, output_fields
 
@@ -320,27 +353,10 @@ def build_batch_dataset(batch_name: str, verbose: bool = False) -> dict:  # noqa
         for col in df_first.columns:
             print(f"  - {col}")
 
-    dropped_input: list[str] = []
-    dropped_output: list[str] = []
-
-    dropped_input = [
-        col.replace("br.", "") for col in df_first.columns if col.startswith(KAPPA_PREFIX) and not np.any(df_first[col].to_numpy().reshape(ny, nx))
-    ]
-
-    for csv_name, field_name in OUTPUT_FIELDS.items():
-        if csv_name in df_first.columns and not np.any(df_first[csv_name].to_numpy().reshape(ny, nx)):
-            dropped_output.append(field_name)
-
     # ------------------------------------------------------------------
     # Preview
     # ------------------------------------------------------------------
-    preview_in, preview_out = build_fields(
-        df_first,
-        nx,
-        ny,
-        dropped_input,
-        dropped_output,
-    )
+    preview_in, preview_out = build_fields(df_first, nx, ny)
 
     if verbose:
         print("\nExample structure for first case:")
@@ -373,13 +389,7 @@ def build_batch_dataset(batch_name: str, verbose: bool = False) -> dict:  # noqa
         nx = meta["geometry"]["nx"]
         ny = meta["geometry"]["ny"]
 
-        input_fields, output_fields = build_fields(
-            df,
-            nx,
-            ny,
-            dropped_input,
-            dropped_output,
-        )
+        input_fields, output_fields = build_fields(df, nx, ny)
 
         torch.save(
             {
@@ -424,6 +434,6 @@ def build_batch_dataset(batch_name: str, verbose: bool = False) -> dict:  # noqa
 
 
 if __name__ == "__main__":
-    result = build_batch_dataset("lhs_var120_seed4001", verbose=True)
+    result = build_batch_dataset("lhs_var160_seed5001", verbose=True)
     for line in result["log"]:
         print(line)

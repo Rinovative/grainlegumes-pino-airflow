@@ -1,3 +1,3 @@
-from . import spectral_hook  # noqa: D104
+from . import pino_loss, spectral_hook  # noqa: D104
 
-__all__ = ["spectral_hook"]
+__all__ = ["pino_loss", "spectral_hook"]
