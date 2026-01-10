@@ -186,6 +186,7 @@ def train_base(
     train_loss: Any | None = None,
     eval_losses: dict[str, Any] | None = None,
     spectral_hook: Any | None = None,
+    manage_wandb: bool = True,
 ) -> None:
     """
     Execute the complete model training pipeline.
@@ -214,6 +215,8 @@ def train_base(
         Evaluation losses.
     spectral_hook : Any | None
         Spectral energy hook for spectral diagnostics.
+    manage_wandb : bool
+        Whether to handle wandb setup and logging.
 
     Returns
     -------
@@ -226,25 +229,41 @@ def train_base(
     # ------------------------------------------------------------
     # Paths
     # ------------------------------------------------------------
-    DATA_ROOT = Path(os.environ.get("DATA_ROOT", Path(__file__).resolve().parents[2] / "model_training" / "data" / "raw"))
+    PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-    train_dataset = DATA_ROOT / CONFIG["train_dataset_name"] / f"{CONFIG['train_dataset_name']}.pt"
-    ood_dataset = DATA_ROOT / CONFIG["ood_dataset_name"] / f"{CONFIG['ood_dataset_name']}.pt"
+    TRAIN_DATA_RAW = PROJECT_ROOT / "model_training" / "data" / "raw"
+    DATA_PROCESSED = PROJECT_ROOT / "model_training" / "data_temp"
+
+    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
+    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
+    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
+    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
+    TMP_ROOT = Path("/home/rino.albertin/workspace/tmp_data/temp_data_training")
+    TRAIN_DATA_RAW = TMP_ROOT / "temp_data" / "temp_raw"
+    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
+    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
+    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
+    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
+
+    train_dataset = TRAIN_DATA_RAW / CONFIG["train_dataset_name"] / f"{CONFIG['train_dataset_name']}.pt"
+    ood_dataset = TRAIN_DATA_RAW / CONFIG["ood_dataset_name"] / f"{CONFIG['ood_dataset_name']}.pt"
 
     # ------------------------------------------------------------
     # Resume logic
     # ------------------------------------------------------------
     resume_from = CONFIG.get("resume_from_dir", None)  # noqa: SIM910
-    base = Path("model_training/data/processed")
+    base = DATA_PROCESSED
 
     if CONFIG.get("optuna_study_name") is not None:
-        base = base / CONFIG["optuna_study_name"]
-
+        base = DATA_PROCESSED / CONFIG["optuna_study_name"]
     base.mkdir(parents=True, exist_ok=True)
+
+    wandb_dir = base / "wandb"
+    wandb_dir.mkdir(parents=True, exist_ok=True)
 
     if resume_from:
         if resume_from == "latest":
-            runs = sorted([p for p in base.iterdir() if p.is_dir()])
+            runs = sorted([p for p in base.iterdir() if p.is_dir() and p.name != "wandb"])
             if not runs:
                 msg = "No previous runs for latest."
                 raise FileNotFoundError(msg)
@@ -268,14 +287,13 @@ def train_base(
         # Local save directory
         save_dir = base / f"{run_name}_{timestamp}"
         save_dir.mkdir(parents=True, exist_ok=True)
-        print(f"[RUN] {run_name} → {save_dir}")
 
     # ------------------------------------------------------------
     # W&B Setup
     # ------------------------------------------------------------
     os.environ["WANDB_PROJECT"] = "grainlegumes_pino"
     os.environ["WANDB_ENTITY"] = "Rinovative-Hub"
-    os.environ["WANDB_DIR"] = "model_training/training/wandb"
+    os.environ["WANDB_DIR"] = str(wandb_dir)
 
     wandb_cfg = build_wandb_config(CONFIG, model, optimizer, scheduler, train_loss, eval_losses or {})
 
@@ -394,4 +412,5 @@ def train_base(
     # ------------------------------------------------------------
     # Finish
     # ------------------------------------------------------------
-    wandb.finish()
+    if manage_wandb and CONFIG.get("optuna_study_name") is None and wandb.run is not None:
+        wandb.finish()

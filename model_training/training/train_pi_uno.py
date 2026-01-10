@@ -14,14 +14,11 @@ from neuralop.models import UNO
 from neuralop.training import AdamW
 from src.util.util_metrics import RMSEOverall
 from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.optimizer import Optimizer
+
 from training.tools.pino_loss import PINOLoss
 from training.tools.spectral_hook import SpectralEnergyHook
 from training.train_base import train_base
-
-# ================================================================
-# 0) Change Architecture
-# ================================================================
-SMALL = True
 
 # ================================================================
 # ⚙️ 1) Base configuration
@@ -32,8 +29,8 @@ CONFIG = {
     "seed": 9,
     "device": "cuda" if torch.cuda.is_available() else "cpu",
     # --- Physics-informed training ---
-    "lambda_phys": 1e-3,
-    "lambda_p": 5e-3,
+    "lambda_phys": 1e-4,
+    "lambda_p": 5e-4,
     # --- Spectral diagnostics ---
     "enable_spectral_hooks": True,
     # --- Dataset ---
@@ -42,12 +39,12 @@ CONFIG = {
     "train_ratio": 0.8,  # fraction of dataset used for training
     "ood_fraction": 0.2,  # fraction of OOD data for evaluation
     # --- Dataloader ---
-    "batch_size": 32 if SMALL else 16,
+    "batch_size": 32,
     "num_workers": 8,
     "pin_memory": True,
     "persistent_workers": True,
     # --- Training ---
-    "n_epochs": 1_000 if SMALL else 1_500,
+    "n_epochs": 1_000,
     "eval_interval": 5,  # evaluate every N epochs
     "mixed_precision": False,  # enables AMP on modern GPUs
     # --- Checkpointing & Resume ---
@@ -60,6 +57,28 @@ CONFIG = {
 }
 
 
+def finalize_config(CONFIG: dict) -> None:
+    """Finalize the configuration by setting default values for missing keys."""
+    # Architecture
+    CONFIG.setdefault("n_layers", 5)
+    CONFIG.setdefault("hidden_channels", 32)
+    CONFIG.setdefault("base_modes", 128)
+    CONFIG.setdefault(
+        "uno_scalings",
+        [
+            [1.0, 1.0],
+            [0.5, 0.5],
+            [1.0, 1.0],
+            [1.0, 1.0],
+            [2.0, 2.0],
+        ],
+    )
+
+    # Physics-informed weights
+    _ = CONFIG["lambda_phys"]
+    _ = CONFIG["lambda_p"]
+
+
 # ================================================================
 # 🧠 2) Model, hooks, optimizer, scheduler, and losses
 # ================================================================
@@ -67,108 +86,87 @@ class UNOWithCheckpoint(UNO):
     """U-NO model with added checkpoint saving functionality."""
 
     def save_checkpoint(self, save_dir: str, save_name: str = "model") -> None:
-        """Save the model state dictionary as a checkpoint."""
+        """Save the model checkpoint to the specified directory."""
         torch.save(self.state_dict(), Path(save_dir) / f"{save_name}.pt")
 
 
-if SMALL:
-    # --- Model small ---
-    n_layers = 4
-    model = UNOWithCheckpoint(
+def build_model(CONFIG: dict) -> UNOWithCheckpoint:
+    """Build the U-NO model based on the configuration."""
+    n_layers = CONFIG["n_layers"]
+    hidden = CONFIG["hidden_channels"]
+    base_modes = CONFIG["base_modes"]
+    uno_scalings = CONFIG["uno_scalings"]
+
+    uno_n_modes = [[base_modes, base_modes]] * n_layers
+    uno_out_channels = [hidden] * n_layers
+
+    return UNOWithCheckpoint(
         in_channels=7,
         out_channels=3,
-        hidden_channels=24,
+        hidden_channels=hidden,
         n_layers=n_layers,
-        uno_out_channels=[24, 24, 24, 24],
-        uno_n_modes=[[12, 12]] * n_layers,
-        uno_scalings=[
-            [1.0, 1.0],  # L0: original
-            [0.5, 0.5],  # L1: downsample
-            [1.0, 1.0],  # L2: process coarse
-            [2.0, 2.0],  # L3: upsample
-        ],
+        uno_out_channels=uno_out_channels,
+        uno_n_modes=uno_n_modes,
+        uno_scalings=uno_scalings,
         channel_mlp_skip="linear",
     ).to(CONFIG["device"])
-else:
-    # --- Model big ---
-    n_layers = 6
-    model = UNOWithCheckpoint(
-        in_channels=7,
-        out_channels=3,
-        hidden_channels=96,
-        n_layers=n_layers,
-        uno_out_channels=[96, 96, 96, 96, 96, 96],
-        uno_n_modes=[[24, 24]] * n_layers,
-        uno_scalings=[
-            [1.0, 1.0],  # L0
-            [0.5, 0.5],  # L1
-            [0.25, 0.25],  # L2 (tiefer)
-            [1.0, 1.0],  # L3
-            [2.0, 2.0],  # L4
-            [4.0, 4.0],  # L5 (zurueck auf Original)
-        ],
-        channel_mlp_skip="linear",
-    ).to(CONFIG["device"])
+
 
 # 🏷️ --- Model naming ---
-scaling_tag = "-".join(str(int(s[0]) if s[0].is_integer() else s[0]).replace(".", "") for s in model.uno_scalings)
+def build_model_name(CONFIG: dict, model: UNO) -> str:
+    """Build a descriptive model name based on the configuration."""
+    scaling_tag = "-".join(str(int(s[0]) if float(s[0]).is_integer() else s[0]).replace(".", "") for s in model.uno_scalings)
 
-parts: list[str] = [
-    "PI-U-NO",
-    f"m{model.uno_n_modes[0][0]}x{model.uno_n_modes[0][1]}",
-    f"h{model.hidden_channels}",
-    f"l{model.n_layers}",
-    f"s{scaling_tag}",
-    f"lam{CONFIG['lambda_phys']:.0e}",
-    str(CONFIG["train_dataset_name"]),
-]
+    parts = [
+        "PI-UNO",
+        f"m{CONFIG['base_modes']}",
+        f"h{CONFIG['hidden_channels']}",
+        f"l{CONFIG['n_layers']}",
+        f"s{scaling_tag}",
+        f"lamPhys{CONFIG['lambda_phys']:.0e}",
+        f"lamP{CONFIG['lambda_p']:.0e}",
+        CONFIG["train_dataset_name"],
+    ]
 
-if CONFIG.get("run_suffix") is not None:
-    parts.append(str(CONFIG["run_suffix"]))
+    if CONFIG.get("run_suffix") is not None:
+        parts.append(str(CONFIG["run_suffix"]))
 
-CONFIG["model_name"] = "_".join(parts)
+    return "_".join(parts)
 
 
-# --- Optional: spectral diagnostics ---
-spectral_hook = None
-if CONFIG.get("enable_spectral_hooks", False):
-    spectral_hook = SpectralEnergyHook()
-    for module in model.modules():
-        if isinstance(module, SpectralConv):
-            module.register_forward_hook(spectral_hook.hook)
-
-if SMALL:  # noqa: SIM108
-    # --- Optimizer model small ---
-    optimizer = AdamW(
+def build_optimizer(CONFIG: dict, model: UNO) -> AdamW:
+    """Build the AdamW optimizer for the model."""
+    return AdamW(
         model.parameters(),
-        lr=1e-2,
-        weight_decay=1e-4,
+        lr=CONFIG.get("lr", 5e-3),
+        weight_decay=CONFIG.get("weight_decay", 1e-4),
     )
-else:
-    # --- Optimizer model big ---
-    optimizer = AdamW(
-        model.parameters(),
-        lr=5e-3,
-        weight_decay=1e-4,
-    )
+
 
 # --- Scheduler ---
-scheduler = ReduceLROnPlateau(
-    optimizer,
-    mode="min",  # reduce when validation loss plateaus
-    factor=0.5,  # halve learning rate
-    patience=20,  # number of evals to wait before reducing
-    min_lr=1e-5,  # do not go below this lr
-)
+def build_scheduler(optimizer: Optimizer) -> ReduceLROnPlateau:
+    """Build the ReduceLROnPlateau scheduler for the optimizer."""
+    return ReduceLROnPlateau(
+        optimizer,
+        mode="min",
+        factor=0.5,
+        patience=20,
+        min_lr=1e-5,
+    )
+
 
 # --- Losses ---
-train_loss = PINOLoss(
-    data_loss=H1Loss(d=2),
-    lambda_phys=CONFIG["lambda_phys"],
-    lambda_p=CONFIG["lambda_p"],
-    in_normalizer=None,
-    out_normalizer=None,
-)
+def build_train_loss(CONFIG: dict) -> PINOLoss:
+    """Build the PINO loss function based on the configuration."""
+    return PINOLoss(
+        data_loss=H1Loss(d=2),
+        lambda_phys=CONFIG["lambda_phys"],
+        lambda_p=CONFIG["lambda_p"],
+        in_normalizer=None,
+        out_normalizer=None,
+    )
+
+
 eval_losses = {
     "h1": H1Loss(d=2),
     "l2": LpLoss(d=2, p=2),
@@ -179,4 +177,34 @@ eval_losses = {
 # ================================================================
 # 🚀 3) Launch training
 # ================================================================
-train_base(CONFIG, model, optimizer, scheduler, train_loss, eval_losses)
+def run_pi_uno(CONFIG: dict, manage_wandb: bool = True) -> None:
+    """Run the PI-U-NO training process."""
+    finalize_config(CONFIG)
+    model = build_model(CONFIG)
+    CONFIG["model_name"] = build_model_name(CONFIG, model)
+
+    spectral_hook = None
+    if CONFIG.get("enable_spectral_hooks", False):
+        spectral_hook = SpectralEnergyHook()
+        for module in model.modules():
+            if isinstance(module, SpectralConv):
+                module.register_forward_hook(spectral_hook.hook)
+
+    optimizer = build_optimizer(CONFIG, model)
+    scheduler = build_scheduler(optimizer)
+    train_loss = build_train_loss(CONFIG)
+
+    train_base(
+        CONFIG,
+        model,
+        optimizer,
+        scheduler,
+        train_loss,
+        eval_losses,
+        spectral_hook,
+        manage_wandb,
+    )
+
+
+if __name__ == "__main__":
+    run_pi_uno(CONFIG)

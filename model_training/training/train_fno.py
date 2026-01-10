@@ -13,6 +13,7 @@ from neuralop.training import AdamW
 from src.util.util_metrics import RMSEOverall
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.optim.optimizer import Optimizer
+
 from training.tools.spectral_hook import SpectralEnergyHook
 from training.train_base import train_base
 
@@ -37,7 +38,7 @@ CONFIG = {
     "pin_memory": True,
     "persistent_workers": True,
     # --- Training ---
-    "n_epochs": 1_000,
+    "n_epochs": 1_0,
     "eval_interval": 5,  # evaluate every N epochs
     "mixed_precision": False,  # enables AMP on modern GPUs
     # --- Checkpointing & Resume ---
@@ -50,32 +51,44 @@ CONFIG = {
 }
 
 
+def finalize_config(CONFIG: dict) -> None:
+    """Finalize the configuration by setting default values for missing keys."""
+    CONFIG.setdefault("n_modes", (12, 12))
+    CONFIG.setdefault("hidden_channels", 24)
+    CONFIG.setdefault("n_layers", 4)
+
+
 # ================================================================
 # 🧠 2) Model, hooks, optimizer, scheduler, and losses
 # ================================================================
+# --- Model ---
 def build_model(CONFIG: dict) -> FNO:
     """Build the FNO model based on the configuration."""
     return FNO(
-        n_modes=CONFIG.get("n_modes", (12, 12)),
-        hidden_channels=CONFIG.get("hidden_channels", 24),
+        n_modes=CONFIG["n_modes"],
+        hidden_channels=CONFIG["hidden_channels"],
         in_channels=7,
         out_channels=3,
-        n_layers=CONFIG.get("n_layers", 4),
+        n_layers=CONFIG["n_layers"],
     ).to(CONFIG["device"])
 
 
 # 🏷️ --- Model naming ---
 def build_model_name(CONFIG: dict) -> str:
     """Build a descriptive model name based on the configuration."""
+    n_modes = CONFIG["n_modes"]
+    hidden = CONFIG["hidden_channels"]
+    layers = CONFIG["n_layers"]
+
     parts = [
         "FNO",
-        f"m{CONFIG.get('n_modes', (12, 12))[0]}x{CONFIG.get('n_modes', (12, 12))[1]}",
-        f"h{CONFIG.get('hidden_channels', 24)}",
-        f"l{CONFIG.get('n_layers', 4)}",
+        f"m{n_modes[0]}x{n_modes[1]}",
+        f"h{hidden}",
+        f"l{layers}",
         CONFIG["train_dataset_name"],
     ]
 
-    if CONFIG.get("run_suffix"):
+    if CONFIG.get("run_suffix") is not None:
         parts.append(str(CONFIG["run_suffix"]))
 
     return "_".join(parts)
@@ -115,8 +128,9 @@ eval_losses = {
 # ================================================================
 # 🚀 3) Launch training
 # ================================================================
-def run_fno(CONFIG: dict) -> None:
+def run_fno(CONFIG: dict, manage_wandb: bool = True) -> None:
     """Run the training process for the FNO model."""
+    finalize_config(CONFIG)
     model = build_model(CONFIG)
     CONFIG["model_name"] = build_model_name(CONFIG)
 
@@ -138,6 +152,7 @@ def run_fno(CONFIG: dict) -> None:
         train_loss,
         eval_losses,
         spectral_hook,
+        manage_wandb,
     )
 
 
