@@ -29,6 +29,7 @@ CONFIG = {
     # --- Physics-informed training ---
     "lambda_phys": 1e-4,
     "lambda_p": 5e-4,
+    "phys_warmup_epochs": 200,
     # --- Spectral diagnostics ---
     "enable_spectral_hooks": True,
     # --- Dataset ---

@@ -140,6 +140,8 @@ class PINOLoss(nn.Module):
         self.data_loss = data_loss
         self.lambda_phys = lambda_phys
         self.lambda_p = lambda_p
+        self.lambda_phys_target = lambda_phys
+        self.lambda_p_target = lambda_p
         self.in_normalizer = in_normalizer
         self.out_normalizer = out_normalizer
         self.log_every = log_every

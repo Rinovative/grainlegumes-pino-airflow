@@ -12,7 +12,6 @@ import os
 import random
 from collections.abc import Mapping
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -21,6 +20,13 @@ import wandb
 from neuralop import Trainer
 from src import dataset
 from src.util.util_metrics import RMSEChannelPhysical
+
+from training import (
+    DATA_PROCESSED,
+    TRAIN_DATA_RAW,
+    WANDB_ENTITY,
+    WANDB_PROJECT,
+)
 
 
 # ================================================================
@@ -172,6 +178,11 @@ def build_wandb_config(
             "train_loss": type(train_loss).__name__ if train_loss else None,
             "eval_losses": {k: type(v).__name__ for k, v in eval_losses.items()},
         },
+        "physics": {
+            "lambda_phys": CONFIG.get("lambda_phys"),
+            "lambda_p": CONFIG.get("lambda_p"),
+            "phys_warmup_epochs": CONFIG.get("phys_warmup_epochs"),
+        },
     }
 
 
@@ -229,22 +240,6 @@ def train_base(
     # ------------------------------------------------------------
     # Paths
     # ------------------------------------------------------------
-    PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-    TRAIN_DATA_RAW = PROJECT_ROOT / "model_training" / "data" / "raw"
-    DATA_PROCESSED = PROJECT_ROOT / "model_training" / "data_temp"
-
-    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
-    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
-    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
-    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
-    TMP_ROOT = Path("/home/rino.albertin/workspace/tmp_data/temp_data_training")
-    TRAIN_DATA_RAW = TMP_ROOT / "temp_data" / "temp_raw"
-    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
-    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
-    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
-    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
-
     train_dataset = TRAIN_DATA_RAW / CONFIG["train_dataset_name"] / f"{CONFIG['train_dataset_name']}.pt"
     ood_dataset = TRAIN_DATA_RAW / CONFIG["ood_dataset_name"] / f"{CONFIG['ood_dataset_name']}.pt"
 
@@ -258,7 +253,7 @@ def train_base(
         base = DATA_PROCESSED / CONFIG["optuna_study_name"]
     base.mkdir(parents=True, exist_ok=True)
 
-    wandb_dir = base / "wandb"
+    wandb_dir = base
     wandb_dir.mkdir(parents=True, exist_ok=True)
 
     if resume_from:
@@ -291,25 +286,36 @@ def train_base(
     # ------------------------------------------------------------
     # W&B Setup
     # ------------------------------------------------------------
-    os.environ["WANDB_PROJECT"] = "grainlegumes_pino"
-    os.environ["WANDB_ENTITY"] = "Rinovative-Hub"
-    os.environ["WANDB_DIR"] = str(wandb_dir)
+    if manage_wandb and CONFIG.get("optuna_study_name") is None:
+        os.environ["WANDB_PROJECT"] = WANDB_PROJECT
+        os.environ["WANDB_ENTITY"] = WANDB_ENTITY
+        os.environ["WANDB_DIR"] = str(wandb_dir)
 
-    wandb_cfg = build_wandb_config(CONFIG, model, optimizer, scheduler, train_loss, eval_losses or {})
+        wandb_cfg = build_wandb_config(CONFIG, model, optimizer, scheduler, train_loss, eval_losses or {})
 
-    wandb.init(
-        project=os.environ["WANDB_PROJECT"],
-        entity=os.environ["WANDB_ENTITY"],
-        name=run_name,
-        dir=os.environ["WANDB_DIR"],
-        config=wandb_cfg,
-        reinit=True,
-    )
+        wandb.init(
+            project=os.environ["WANDB_PROJECT"],
+            entity=os.environ["WANDB_ENTITY"],
+            name=run_name,
+            dir=os.environ["WANDB_DIR"],
+            config=wandb_cfg,
+            reinit=True,
+        )
 
+    # ------------------------------------------------------------
+    # Save run config
+    # ------------------------------------------------------------
     config_path = save_dir / "config.json"
     with config_path.open("w", encoding="utf-8") as f:
+        wandb_cfg = build_wandb_config(
+            CONFIG=CONFIG,
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            train_loss=train_loss,
+            eval_losses=eval_losses or {},
+        )
         json.dump(make_json_safe(wandb_cfg), f, indent=2)
-    wandb.save(str(config_path))
 
     # ------------------------------------------------------------
     # Dataset
@@ -322,7 +328,7 @@ def train_base(
     }
 
     train_loader, test_loaders, data_processor = dataset.dataset_base.create_dataloaders(
-        dataset_cls=dataset.dataset_simulation.PermeabilityFlowDataset,
+        dataset_cls=dataset.dataset_simulation.PhysicsDataset,
         path_train=str(train_dataset),
         path_test_ood=str(ood_dataset),
         train_ratio=CONFIG["train_ratio"],
@@ -344,6 +350,18 @@ def train_base(
             in_normalizer=data_processor.in_normalizer,
             out_normalizer=data_processor.out_normalizer,
         )
+
+    # ------------------------------------------------------------
+    # Physics loss warmup setup
+    # ------------------------------------------------------------
+    phys_warmup_epochs = CONFIG.get("phys_warmup_epochs", 0)
+
+    if train_loss is not None and phys_warmup_epochs > 0:
+        train_loss.lambda_phys_target = train_loss.lambda_phys
+        train_loss.lambda_p_target = train_loss.lambda_p
+
+        train_loss.lambda_phys = 0.0
+        train_loss.lambda_p = 0.0
 
     # ------------------------------------------------------------
     # Physical RMSE metrics (logging only)
@@ -372,9 +390,35 @@ def train_base(
     )
 
     # ------------------------------------------------------------
+    # Physics warmup callback (epoch-wise)
+    # ------------------------------------------------------------
+    if train_loss is not None and phys_warmup_epochs > 0:
+        orig_on_epoch_start = trainer.on_epoch_start
+
+        def _on_epoch_start(epoch: int) -> None:
+            orig_on_epoch_start(epoch)
+
+            frac = min(1.0, (epoch + 1) / phys_warmup_epochs)
+
+            train_loss.lambda_phys = frac * train_loss.lambda_phys_target
+            train_loss.lambda_p = frac * train_loss.lambda_p_target
+
+            if wandb.run is not None:
+                wandb.log(
+                    {
+                        "physics/lambda_phys": train_loss.lambda_phys,
+                        "physics/lambda_p": train_loss.lambda_p,
+                    },
+                    commit=False,
+                )
+
+        trainer.on_epoch_start = _on_epoch_start
+
+    # ------------------------------------------------------------
     # Training
     # ------------------------------------------------------------
-    save_best = CONFIG["save_best"] if CONFIG.get("save_best") is not None else None
+    save_best = CONFIG.get("save_best")
+    save_every = CONFIG.get("save_every")
 
     if resume_from is None:
         # → NO RESUME
@@ -387,6 +431,7 @@ def train_base(
             eval_losses=eval_losses,
             save_dir=str(save_dir),
             save_best=save_best,  # pyright: ignore[reportArgumentType]
+            save_every=save_every,  # pyright: ignore[reportArgumentType]
         )
     else:
         # → RESUME
@@ -399,8 +444,24 @@ def train_base(
             eval_losses=eval_losses,
             save_dir=str(save_dir),
             save_best=save_best,  # pyright: ignore[reportArgumentType]
+            save_every=save_every,  # pyright: ignore[reportArgumentType]
             resume_from_dir=str(resume_from),
         )
+
+    # ------------------------------------------------------------
+    # Update final config (after training / resume)
+    # ------------------------------------------------------------
+    config_path = save_dir / "config.json"
+    with config_path.open("w", encoding="utf-8") as f:
+        wandb_cfg = build_wandb_config(
+            CONFIG=CONFIG,
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            train_loss=train_loss,
+            eval_losses=eval_losses or {},
+        )
+        json.dump(make_json_safe(wandb_cfg), f, indent=2)
 
     # ------------------------------------------------------------
     # Spectral diagnostics save

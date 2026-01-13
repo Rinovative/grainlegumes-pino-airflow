@@ -87,7 +87,10 @@ class UNOWithCheckpoint(UNO):
 
     def save_checkpoint(self, save_dir: str, save_name: str = "model") -> None:
         """Save the model checkpoint to the specified directory."""
-        torch.save(self.state_dict(), Path(save_dir) / f"{save_name}.pt")
+        torch.save(self.state_dict(), Path(save_dir) / f"{save_name}_state_dict.pt")
+
+        metadata = {"model_class": self.__class__.__name__, "architecture": "UNO"}
+        torch.save(metadata, Path(save_dir) / f"{save_name}_metadata.pkl")
 
 
 def build_model(CONFIG: dict) -> UNOWithCheckpoint:

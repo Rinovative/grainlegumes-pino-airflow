@@ -35,7 +35,7 @@ CONFIG = {
     "train_ratio": 0.8,  # fraction of dataset used for training
     "ood_fraction": 0.2,  # fraction of OOD data for evaluation
     # --- Dataloader ---
-    "batch_size": 32,
+    "batch_size": 16,
     "num_workers": 8,
     "pin_memory": True,
     "persistent_workers": True,
@@ -55,18 +55,16 @@ CONFIG = {
 
 def finalize_config(CONFIG: dict) -> None:
     """Finalize the configuration by setting default values for missing keys."""
-    CONFIG.setdefault("n_layers", 6)
-    CONFIG.setdefault("hidden_channels", 48)
-    CONFIG.setdefault("base_modes", 48)
+    CONFIG.setdefault("n_layers", 4)
+    CONFIG.setdefault("hidden_channels", 64)
+    CONFIG.setdefault("base_modes", 64)
     CONFIG.setdefault(
         "uno_scalings",
         [
             [1.0, 1.0],
             [0.5, 0.5],
-            [0.25, 0.25],
-            [0.25, 0.25],
-            [0.5, 0.5],
             [1.0, 1.0],
+            [2.0, 2.0],
         ],
     )
 
@@ -79,7 +77,10 @@ class UNOWithCheckpoint(UNO):
 
     def save_checkpoint(self, save_dir: str, save_name: str = "model") -> None:
         """Save the model checkpoint to the specified directory."""
-        torch.save(self.state_dict(), Path(save_dir) / f"{save_name}.pt")
+        torch.save(self.state_dict(), Path(save_dir) / f"{save_name}_state_dict.pt")
+
+        metadata = {"model_class": self.__class__.__name__, "architecture": "UNO"}
+        torch.save(metadata, Path(save_dir) / f"{save_name}_metadata.pkl")
 
 
 def build_model(CONFIG: dict) -> UNOWithCheckpoint:

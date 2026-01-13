@@ -38,7 +38,7 @@ CONFIG = {
     "pin_memory": True,
     "persistent_workers": True,
     # --- Training ---
-    "n_epochs": 1_0,
+    "n_epochs": 1_000,
     "eval_interval": 5,  # evaluate every N epochs
     "mixed_precision": False,  # enables AMP on modern GPUs
     # --- Checkpointing & Resume ---

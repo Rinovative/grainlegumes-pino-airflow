@@ -5,196 +5,157 @@ from __future__ import annotations
 import copy
 from typing import TYPE_CHECKING, cast
 
-import torch
-import wandb
-from optuna.exceptions import TrialPruned
-from optuna.pruners import MedianPruner
-from optuna.study import create_study
-
+from training.optuna.optuna_setup import (
+    run_optuna_study,
+    run_staged_optuna_training,
+)
 from training.train_pi_uno import CONFIG as BASE_CONFIG
 from training.train_pi_uno import run_pi_uno
 
 if TYPE_CHECKING:
-    from optuna.trial import Trial
+    from optuna import Trial
 
 
 # ================================================================
-# Helper: build flexible symmetric U-shape scalings
+# 🏷️ PI-UNO model naming
 # ================================================================
-def build_uno_scalings(
-    n_layers: int,
-    bottleneck_scale: float,
-    depth_steps: int,
-    max_upscale: float,
-) -> list[list[float]]:
-    """Build U-shape scalings for UNO based on the number of layers and bottleneck parameters."""
-    if n_layers < 3:  # noqa: PLR2004
-        msg = "UNO needs at least 3 layers"
-        raise ValueError(msg)
+def build_pi_uno_run_name_from_config(CONFIG: dict) -> str:
+    """Build a descriptive PI-UNO run name based on the configuration."""
+    scaling_tag = "-".join(str(int(s[0]) if float(s[0]).is_integer() else s[0]).replace(".", "") for s in CONFIG["uno_scalings"])
 
-    mid = n_layers // 2
+    parts = [
+        "PI-UNO",
+        f"m{CONFIG['base_modes']}",
+        f"h{CONFIG['hidden_channels']}",
+        f"l{CONFIG['n_layers']}",
+        f"s{scaling_tag}",
+        f"lamPhys{CONFIG['lambda_phys']:.0e}",
+        f"lamP{CONFIG['lambda_p']:.0e}",
+    ]
 
-    # --- Down path ---
-    down = [1.0]
-    for i in range(1, mid + 1):
-        factor = bottleneck_scale ** (i / depth_steps)
-        down.append(factor)
-    down[-1] = bottleneck_scale
+    if CONFIG.get("run_suffix") is not None:
+        parts.append(str(CONFIG["run_suffix"]))
 
-    # --- Up path (mirror) ---
-    up = down[:-1][::-1] if n_layers % 2 == 0 else down[::-1]
-    scalings = down + up[1:]
-
-    # --- Limit upscaling ---
-    max_val = max(scalings)
-    if max_val > 1.0:
-        scale = min(max_upscale / max_val, 1.0)
-        scalings = [s * scale for s in scalings]
-
-    return [[float(s), float(s)] for s in scalings[:n_layers]]
+    return "_".join(parts)
 
 
 # ================================================================
-# 🎯 Optuna objective for PI-UNO
+# Grid-safe UNO architecture presets
+# ================================================================
+UNO_PRESETS: dict[str, list[list[float]]] = {
+    "l4_s1-05-1-2": [
+        [1.0, 1.0],
+        [0.5, 0.5],
+        [1.0, 1.0],
+        [2.0, 2.0],
+    ],
+    "l5_s1-05-1-1-2": [
+        [1.0, 1.0],
+        [0.5, 0.5],
+        [1.0, 1.0],
+        [1.0, 1.0],
+        [2.0, 2.0],
+    ],
+    "l6_s1-05-05-1-2-2": [
+        [1.0, 1.0],
+        [0.5, 0.5],
+        [0.5, 0.5],
+        [1.0, 1.0],
+        [2.0, 2.0],
+        [2.0, 2.0],
+    ],
+}
+
+
+# ================================================================
+# 🎯 Optuna objective
 # ================================================================
 def objective(trial: Trial) -> float:
     """Optuna objective function for PI-UNO hyperparameter optimization."""
-    base_config = copy.deepcopy(BASE_CONFIG)
-    CONFIG: dict[str, object] = dict(base_config)
+    CONFIG: dict[str, object] = dict(copy.deepcopy(BASE_CONFIG))
 
     # ------------------------------------------------------------
     # Trial identity
     # ------------------------------------------------------------
-    CONFIG["optuna_study_name"] = "optuna_pi_uno"
+    CONFIG["optuna_study_name"] = trial.study.study_name
     CONFIG["run_suffix"] = f"trial{trial.number}"
     CONFIG["resume_from_dir"] = None
 
     # ------------------------------------------------------------
-    # 🔍 Hyperparameter search space
+    # 🚑 Bootstrap trial (stabile Referenz gegen Serien-OOM)
     # ------------------------------------------------------------
+    if trial.number == 0:
+        CONFIG["uno_scalings"] = UNO_PRESETS["l5_s1-05-1-1-2"]
+        CONFIG["n_layers"] = 5
+        CONFIG["base_modes"] = 48
+        CONFIG["hidden_channels"] = 64
+        CONFIG["lr"] = 5e-3
+        CONFIG["batch_size"] = 32
+        CONFIG["lambda_phys"] = 1e-4
+        CONFIG["lambda_p"] = 1e-4
+        CONFIG["phys_warmup_epochs"] = 300
+    else:
+        # ------------------------------------------------------------
+        # 🔍 Hyperparameter search space
+        # ------------------------------------------------------------
 
-    # --- Architecture ---
-    CONFIG["n_layers"] = trial.suggest_categorical("n_layers", [4, 5, 6])
-    CONFIG["base_modes"] = trial.suggest_categorical("base_modes", [32, 48, 64])
-    CONFIG["hidden_channels"] = trial.suggest_categorical("hidden_channels", [64, 96])
+        # --- Grid-safe UNO presets ---
+        preset = trial.suggest_categorical("uno_preset", list(UNO_PRESETS))
+        CONFIG["uno_scalings"] = UNO_PRESETS[preset]
+        CONFIG["n_layers"] = len(UNO_PRESETS[preset])
 
-    # --- U-shape control ---
-    CONFIG["bottleneck_scale"] = trial.suggest_float("bottleneck_scale", 0.25, 0.6)
-    CONFIG["depth_steps"] = trial.suggest_int(
-        "depth_steps",
-        1,
-        max(1, cast("int", CONFIG["n_layers"]) // 2),
+        CONFIG["base_modes"] = trial.suggest_categorical("base_modes", [32, 48, 64, 96, 128])
+        CONFIG["hidden_channels"] = trial.suggest_categorical("hidden_channels", [32, 64, 96, 128])
+
+        # --- Optimisation ---
+        CONFIG["lr"] = trial.suggest_float("lr", 3e-3, 1.2e-2, log=True)
+
+        # --- Batch size ---
+        CONFIG["batch_size"] = trial.suggest_categorical("batch_size", [16, 32])
+
+        # --- Physics-informed weights ---
+        n_layers = cast("int", CONFIG["n_layers"])
+        hidden = cast("int", CONFIG["hidden_channels"])
+        base_modes = cast("int", CONFIG["base_modes"])
+
+        # → capacity-aware lambda_phys
+        capacity = n_layers * hidden * base_modes
+        phys_ratio = trial.suggest_float("phys_ratio", 0.5, 2.0, log=True)
+        p_ratio = trial.suggest_float("p_ratio", 0.5, 20.0, log=True)
+
+        lambda_phys = phys_ratio / capacity
+        lambda_p = p_ratio * lambda_phys
+
+        CONFIG["lambda_phys"] = lambda_phys
+        CONFIG["lambda_p"] = lambda_p
+
+        # 🔥 Physics warmup: capacity-aware (deterministic)
+        warmup = int(30 * capacity**0.5)
+        CONFIG["phys_warmup_epochs"] = int(min(max(warmup, 50), 300))
+
+    # ------------------------------------------------------------
+    # 🏷️ FINAL run name (must be set BEFORE wandb.init)
+    # ------------------------------------------------------------
+    CONFIG["model_name"] = build_pi_uno_run_name_from_config(CONFIG)
+
+    # ------------------------------------------------------------
+    # 🚀 Run staged Optuna training
+    # ------------------------------------------------------------
+    return run_staged_optuna_training(
+        trial=trial,
+        config=CONFIG,
+        run_fn=run_pi_uno,
+        metric_key="eval_overall_rmse",
+        budgets=[50, 100, 200, 300, 400, 600],
     )
-    CONFIG["max_upscale"] = trial.suggest_float("max_upscale", 1.0, 1.5)
-
-    # --- Physics-informed weights ---
-    CONFIG["lambda_phys"] = trial.suggest_float("lambda_phys", 1e-6, 5e-3, log=True)
-    CONFIG["lambda_p"] = trial.suggest_float("lambda_p", 1e-4, 1e-2, log=True)
-
-    # --- Optimisation ---
-    CONFIG["lr"] = trial.suggest_float("lr", 3e-3, 1.2e-2, log=True)
-
-    # --- Batch size ---
-    CONFIG["batch_size"] = trial.suggest_categorical("batch_size", [8, 16])
-
-    # ------------------------------------------------------------
-    # 🔧 Derived architecture
-    # ------------------------------------------------------------
-    CONFIG["uno_scalings"] = build_uno_scalings(
-        n_layers=cast("int", CONFIG["n_layers"]),
-        bottleneck_scale=cast("float", CONFIG["bottleneck_scale"]),
-        depth_steps=cast("int", CONFIG["depth_steps"]),
-        max_upscale=cast("float", CONFIG["max_upscale"]),
-    )
-
-    # ------------------------------------------------------------
-    # ⏱️ Staged training (cheap → expensive)
-    # ------------------------------------------------------------
-    budgets = [300, 400, 600]
-    resume_dir: str | None = None
-    last_value: float | None = None
-
-    try:
-        for n_epochs in budgets:
-            CONFIG["n_epochs"] = n_epochs
-            CONFIG["resume_from_dir"] = resume_dir
-
-            # ------------------------
-            # Run training stage
-            # ------------------------
-            try:
-                run_pi_uno(CONFIG, manage_wandb=False)
-            except RuntimeError as err:
-                msg = str(err).lower()
-
-                if "out of memory" in msg:
-                    torch.cuda.empty_cache()
-                    raise TrialPruned from None
-
-                if "size of tensor" in msg and "must match the size of tensor" in msg:
-                    raise TrialPruned from None
-
-                raise
-
-            # ------------------------
-            # Read metric
-            # ------------------------
-            run = wandb.run
-            if run is None:
-                msg = "wandb.run is None after run_pi_uno"
-                raise RuntimeError(msg)
-
-            value = run.summary.get("eval_overall_rmse")
-            if value is None:
-                msg = "eval_overall_rmse not found in wandb summary"
-                raise RuntimeError(msg)
-
-            value = float(value)
-            last_value = value
-
-            # ------------------------
-            # Report & prune
-            # ------------------------
-            trial.report(value, step=n_epochs)
-
-            if trial.should_prune():
-                raise TrialPruned
-
-            resume_dir = "latest"
-
-        if last_value is None:
-            msg = "No valid objective value produced"
-            raise RuntimeError(msg)
-
-        return last_value
-
-    finally:
-        # --------------------------------------------------------
-        # GUARANTEED cleanup (no zombie runs)
-        # --------------------------------------------------------
-        if wandb.run is not None:
-            wandb.finish()
 
 
 # ================================================================
 # 🧪 Study launcher
 # ================================================================
 if __name__ == "__main__":
-    study = create_study(
+    run_optuna_study(
+        objective=objective,
         study_name="optuna_pi_uno",
-        direction="minimize",
-        pruner=MedianPruner(
-            n_startup_trials=3,
-            n_warmup_steps=1,
-            interval_steps=1,
-        ),
+        n_trials=30,
     )
-
-    study.optimize(
-        objective,
-        n_trials=25,
-        show_progress_bar=False,
-    )
-
-    print("Best trial:")
-    print(study.best_trial)
