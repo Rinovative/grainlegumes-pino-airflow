@@ -173,7 +173,7 @@ def plot_sample_prediction_overview(*, datasets: dict[str, pd.DataFrame]) -> wid
     mask_threshold = 1e-4
 
     # -------------------------------------------------------------
-    # Error mode selector: MAE (default) vs. relative [%]
+    # Error mode selector: MAE vs Relative [%]
     # -------------------------------------------------------------
     error_selector = util.util_plot_components.ui_radio_error_mode()
 
@@ -352,13 +352,7 @@ def plot_sample_prediction_overview(*, datasets: dict[str, pd.DataFrame]) -> wid
 
 def plot_sample_kappa_tensor_with_overlay(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
     """
-    Build an interactive evaluation viewer for permeability tensor components with error contour overlays.
-
-    For each permeability tensor component, the physical field (kappa or log10(kappa))
-    is shown together with error contour lines of a selected output channel (p, u, v, U).
-
-    Error contours correspond to fixed global quantiles (50 %, 75 %, 90 %) of the
-    selected error metric (MAE or Relative [%]).
+    Build an interactive viewer for permeability tensor components with error overlay.
 
     Parameters
     ----------
@@ -371,12 +365,13 @@ def plot_sample_kappa_tensor_with_overlay(*, datasets: dict[str, pd.DataFrame]) 
     Returns
     -------
     widgets.VBox
-        Interactive UI container with navigation and selectors.
+        Interactive UI container with dropdown.
 
     """
     cmap_kappa = "viridis"
     cmap_error = "Reds"
-    n_kappa_levels = 10
+    cmap_offdiag = "viridis"
+    n_kappa_levels = 11
     mask_threshold = 1e-4
 
     channel_selector = util.util_plot_components.ui_dropdown_channel()
@@ -386,22 +381,7 @@ def plot_sample_kappa_tensor_with_overlay(*, datasets: dict[str, pd.DataFrame]) 
     # ------------------------------------------------------------------
     # Error computation
     # ------------------------------------------------------------------
-    def _compute_error_field(
-        *,
-        err: np.ndarray,
-        gt: np.ndarray,
-        channel_idx: int,
-        mode: str,
-    ) -> np.ndarray:
-        """
-        Compute error field for a given channel and error mode.
-
-        Returns
-        -------
-        np.ndarray
-            Error field of shape (H, W).
-
-        """
+    def _compute_error_field(*, err: np.ndarray, gt: np.ndarray, channel_idx: int, mode: str) -> np.ndarray:
         if mode == "MAE":
             return np.nan_to_num(np.abs(err[channel_idx]), nan=0.0)
 
@@ -424,7 +404,7 @@ def plot_sample_kappa_tensor_with_overlay(*, datasets: dict[str, pd.DataFrame]) 
         kappa_scale: widgets.ValueWidget,
     ) -> Figure:
         """
-        Plot a single evaluation case with kappa tensor components and error overlays.
+        Plot a single evaluation case with kappa tensor components and error overlay.
 
         Parameters
         ----------
@@ -444,7 +424,7 @@ def plot_sample_kappa_tensor_with_overlay(*, datasets: dict[str, pd.DataFrame]) 
         Returns
         -------
         matplotlib.figure.Figure
-            Complete figure with kappa components and error overlays.
+            Complete figure with kappa tensor subplots.
 
         """
         df = df.reset_index(drop=True)
@@ -455,50 +435,41 @@ def plot_sample_kappa_tensor_with_overlay(*, datasets: dict[str, pd.DataFrame]) 
         Ly = float(row["geometry_Ly"])
         ny, nx = kappa.shape[1:]
 
-        x = np.linspace(0, Lx, nx)
-        y = np.linspace(0, Ly, ny)
+        x = np.linspace(0.0, Lx, nx)
+        y = np.linspace(0.0, Ly, ny)
         X, Y = np.meshgrid(x, y)
 
         channel_name = channel.value
+        channel_idx = CHANNEL_INDICES[channel_name]
 
         err_field = _compute_error_field(
             err=err,
             gt=gt,
-            channel_idx=CHANNEL_INDICES[channel_name],
+            channel_idx=channel_idx,
             mode=error_mode.value,
         )
 
         # --------------------------------------------------
-        # Fixed 2x2 symmetric tensor layout (kxy = kyx)
+        # Tensor layout
         # --------------------------------------------------
         tensor_layout = [
             ("kxx", "kxx"),
             ("kxy", "kxy"),
-            ("kyx", "kxy"),  # explicit symmetry
+            ("kyx", "kxy"),
             ("kyy", "kyy"),
         ]
 
-        # --------------------------------------------------
-        # Kappa components (only existing ones)
-        # --------------------------------------------------
         name_to_idx = {name: i for i, name in enumerate(kappa_names)}
+        comps: list[tuple[str, np.ndarray]] = []
 
-        comps = []
-        for display_name, source_name in tensor_layout:
-            if source_name in name_to_idx:
-                comps.append((display_name, kappa[name_to_idx[source_name]]))
-        while len(comps) < 4:  # noqa: PLR2004
-            comps.append(("", np.full_like(kappa[0], np.nan)))
+        for display, source in tensor_layout:
+            if source in name_to_idx:
+                comps.append((display, kappa[name_to_idx[source]]))
+            else:
+                comps.append((display, np.full_like(kappa[0], np.nan)))
 
-        # fixed 2x2 layout
         nrows, ncols = 2, 2
-
-        # Apply kappa scaling
-        if kappa_scale.value == "log10(kappa)":
-            comps = [(name, np.log10(np.maximum(field, 1e-30))) for name, field in comps]
-            kappa_unit = "log10(m²)"
-        else:
-            kappa_unit = "m²"
+        use_log = kappa_scale.value == "log10(kappa)"
 
         fig, axes = plt.subplots(
             nrows,
@@ -506,40 +477,78 @@ def plot_sample_kappa_tensor_with_overlay(*, datasets: dict[str, pd.DataFrame]) 
             figsize=(4.8 * (ncols + 1), 3.6 * nrows),
         )
 
-        if nrows == 1:
-            axes = np.expand_dims(axes, axis=0)
-
         # --------------------------------------------------
-        # Levels
+        # Collect values for scaling
         # --------------------------------------------------
-        kappa_levels = util.util_plot_components.compute_levels(
-            np.concatenate([c.ravel() for _, c in comps]),
-            n_kappa_levels,
+        diag_vals = np.concatenate(
+            [f.ravel() for n, f in comps if n in {"kxx", "kyy"}],
+            axis=0,
         )
 
-        valid_err = err_field[np.isfinite(err_field)]
-        if valid_err.size > 0:
-            err_levels = np.quantile(valid_err, [0.75, 0.95])
-            err_levels = np.unique(err_levels)
-        else:
-            err_levels = []
+        offdiag_vals = np.concatenate(
+            [f.ravel() for n, f in comps if n in {"kxy", "kyx"}],
+            axis=0,
+        )
 
         # --------------------------------------------------
-        # Kappa panels + error contours
+        # Levels: diagonal
+        # --------------------------------------------------
+        if use_log and diag_vals.size > 0:
+            lo = np.nanpercentile(diag_vals, 5.0)
+            hi = np.nanpercentile(diag_vals, 95.0)
+            if lo > 0.0 and hi > lo:
+                levels_diag = np.logspace(np.log10(lo), np.log10(hi), n_kappa_levels)
+            else:
+                levels_diag = util.util_plot_components.compute_levels(diag_vals, n_kappa_levels)
+        else:
+            levels_diag = util.util_plot_components.compute_levels(diag_vals, n_kappa_levels)
+
+        # --------------------------------------------------
+        # Levels: off-diagonal (kxy / kyx)
+        # NICHT symmetrisch, echte min/max (quantil-beschraenkt)
+        # --------------------------------------------------
+        if offdiag_vals.size > 0:
+            vals = offdiag_vals[np.isfinite(offdiag_vals)]
+
+            if vals.size > 0:
+                lo = float(np.nanpercentile(vals, 5.0))  # z.B. 5 %
+                hi = float(np.nanpercentile(vals, 95.0))  # z.B. 95 %
+
+                levels_offdiag = np.linspace(lo, hi, n_kappa_levels) if hi > lo else util.util_plot_components.compute_levels(vals, n_kappa_levels)
+            else:
+                levels_offdiag = util.util_plot_components.compute_levels(
+                    offdiag_vals,
+                    n_kappa_levels,
+                )
+        else:
+            levels_offdiag = util.util_plot_components.compute_levels(
+                offdiag_vals,
+                n_kappa_levels,
+            )
+
+        # --------------------------------------------------
+        # Error contour levels
+        # --------------------------------------------------
+        valid_err = err_field[np.isfinite(err_field)]
+        err_levels = np.unique(np.quantile(valid_err, [0.75, 0.95])) if valid_err.size > 0 else np.empty(0, dtype=float)
+
+        # --------------------------------------------------
+        # Kappa panels
         # --------------------------------------------------
         for i, (name, field) in enumerate(comps):
             r, c = divmod(i, ncols)
             ax = axes[r, c]
 
-            im = ax.contourf(
-                X,
-                Y,
-                field,
-                levels=kappa_levels,
-                cmap=cmap_kappa,
-            )
+            if name in {"kxx", "kyy"}:
+                levels = levels_diag
+                cmap = cmap_kappa
+            else:
+                levels = levels_offdiag
+                cmap = cmap_offdiag
 
-            if len(err_levels) > 0:
+            im = ax.contourf(X, Y, field, levels=levels, cmap=cmap)
+
+            if err_levels.size > 0:
                 ax.contour(
                     X,
                     Y,
@@ -549,7 +558,10 @@ def plot_sample_kappa_tensor_with_overlay(*, datasets: dict[str, pd.DataFrame]) 
                     linewidths=1.0,
                 )
 
-            ax.set_title(f"{name} [{kappa_unit}]")
+            if name in {"kxx", "kyy"} and use_log:
+                ax.set_title(f"{name} [m², log scale]")
+            else:
+                ax.set_title(f"{name} [m²]")
 
             util.util_plot_components.apply_axis_labels(
                 ax,
@@ -560,83 +572,48 @@ def plot_sample_kappa_tensor_with_overlay(*, datasets: dict[str, pd.DataFrame]) 
             )
 
             cb = fig.colorbar(im, ax=ax, fraction=0.045)
-            formatter = util.util_plot_components.choose_colorbar_formatter(*im.get_clim())
-            cb.ax.yaxis.set_major_formatter(formatter)
+            cb.ax.yaxis.set_major_formatter(util.util_plot_components.choose_colorbar_formatter(*im.get_clim()))
 
         # --------------------------------------------------
-        # Right column: channel GT + error contours
+        # Right column: GT
         # --------------------------------------------------
         ax_gt = axes[0, -1]
-        channel_idx = CHANNEL_INDICES[channel_name]
         gt_levels = util.util_plot_components.compute_levels(gt[channel_idx], n_kappa_levels)
 
-        im = ax_gt.contourf(
-            X,
-            Y,
-            gt[channel_idx],
-            levels=gt_levels,
-            cmap="turbo",
-        )
+        im = ax_gt.contourf(X, Y, gt[channel_idx], levels=gt_levels, cmap="turbo")
 
-        if len(err_levels) > 0:
-            ax_gt.contour(
-                X,
-                Y,
-                err_field,
-                levels=err_levels,
-                cmap=cmap_error,
-                linewidths=1.0,
-            )
+        if err_levels.size > 0:
+            ax_gt.contour(X, Y, err_field, levels=err_levels, cmap=cmap_error, linewidths=1.0)
 
         ax_gt.set_title(f"{channel_name} true [{UNIT_MAP[channel_name]}]")
-
         cb = fig.colorbar(im, ax=ax_gt, fraction=0.045)
-        formatter = util.util_plot_components.choose_colorbar_formatter(*im.get_clim())
-        cb.ax.yaxis.set_major_formatter(formatter)
+        cb.ax.yaxis.set_major_formatter(util.util_plot_components.choose_colorbar_formatter(*im.get_clim()))
 
-        util.util_plot_components.apply_axis_labels(
-            ax_gt,
-            ncols,
-            Lx,
-            Ly,
-            is_last_row=(nrows == 1),
-        )
+        util.util_plot_components.apply_axis_labels(ax_gt, ncols, Lx, Ly, is_last_row=False)
 
         # --------------------------------------------------
-        # Right column: error reference
+        # Right column: error field
         # --------------------------------------------------
-        if nrows > 1:
-            ax_err = axes[1, -1]
+        ax_err = axes[1, -1]
+        err_levels_full = util.util_plot_components.compute_levels(err_field)
 
-            im = ax_err.contourf(
-                X,
-                Y,
-                err_field,
-                levels=util.util_plot_components.compute_levels(err_field),
-                cmap=cmap_error,
-            )
+        im = ax_err.contourf(X, Y, err_field, levels=err_levels_full, cmap=cmap_error)
+        unit = "MAE" if error_mode.value == "MAE" else "rel [%]"
+        ax_err.set_title(f"{channel_name} error [{unit}]")
 
-            unit = "MAE" if error_mode.value == "MAE" else "rel [%]"
-            ax_err.set_title(f"{channel_name} error [{unit}]")
+        cb = fig.colorbar(im, ax=ax_err, fraction=0.045)
+        cb.ax.yaxis.set_major_formatter(util.util_plot_components.choose_colorbar_formatter(*im.get_clim()))
 
-            cb = fig.colorbar(im, ax=ax_err, fraction=0.045)
-            formatter = util.util_plot_components.choose_colorbar_formatter(*im.get_clim())
-            cb.ax.yaxis.set_major_formatter(formatter)
-
-            util.util_plot_components.apply_axis_labels(
-                ax_err,
-                ncols,
-                Lx,
-                Ly,
-                is_last_row=(nrows - 1 == 1),
-            )
+        util.util_plot_components.apply_axis_labels(ax_err, ncols, Lx, Ly, is_last_row=True)
 
         # --------------------------------------------------
         # Supertitle
         # --------------------------------------------------
         err_label = "MAE" if error_mode.value == "MAE" else "Relative error [%]"
         fig.suptitle(
-            f"{dataset_name} — Case {idx + 1} — Error contours: 75 %, 95 % ({err_label}, channel {channel_name}, kappa scale: {kappa_scale.value})",
+            f"{dataset_name} — Case {idx + 1} — Error contours: 75 %, 95 % "
+            f"({err_label}, channel {channel_name}, "
+            f"kappa scale: diag={kappa_scale.value}, offdiag=linear)",
             fontsize=14,
         )
 
@@ -648,11 +625,7 @@ def plot_sample_kappa_tensor_with_overlay(*, datasets: dict[str, pd.DataFrame]) 
         datasets=datasets,
         start_idx=0,
         enable_dataset_dropdown=True,
-        extra_widgets=[
-            kappa_scale_selector,
-            channel_selector,
-            error_selector,
-        ],
+        extra_widgets=[kappa_scale_selector, channel_selector, error_selector],
         kappa_scale=kappa_scale_selector,
         channel=channel_selector,
         error_mode=error_selector,

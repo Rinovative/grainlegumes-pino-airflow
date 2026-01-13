@@ -113,7 +113,6 @@ def run_staged_optuna_training(
         name=config["model_name"],
         dir=os.environ["WANDB_DIR"],
         reinit=True,
-        config={**config},
         tags=[f"study:{config['optuna_study_name']}"],
     )
 
@@ -187,7 +186,6 @@ def run_staged_optuna_training(
             # 🔄 After stage 0: rewrite W&B config with final config
             # ------------------------------------------------------------
             if stage_idx == 0 and wandb.run is not None:
-                wandb.run.config.clear()
                 wandb.run.config.update({**config}, allow_val_change=True)
 
             # ------------------------

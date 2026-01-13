@@ -33,7 +33,7 @@ CHANNELS = OUTPUT_FIELDS
 CHANNEL_INDICES = {name: i for i, name in enumerate(CHANNELS)}
 
 # =============================================================================
-# 2-1. ERROR VS |GT| MAGNITUDE (OVERLAYED DATASETS, CASECOUNT)
+# ERROR VS |GT| MAGNITUDE (OVERLAYED DATASETS, CASECOUNT)
 # =============================================================================
 
 
@@ -193,7 +193,7 @@ def plot_error_vs_gt_magnitude(*, datasets: dict[str, pd.DataFrame]) -> widgets.
                     centers,
                     q25,
                     q75,
-                    alpha=0.25,
+                    alpha=0.1,
                 )
 
                 if ch == CHANNELS[0]:
@@ -219,7 +219,6 @@ def plot_error_vs_gt_magnitude(*, datasets: dict[str, pd.DataFrame]) -> widgets.
         ax_legend.legend(
             legend_handles,
             active,
-            title="Dataset",
             loc="upper left",
         )
 
@@ -249,7 +248,7 @@ def plot_error_vs_gt_magnitude(*, datasets: dict[str, pd.DataFrame]) -> widgets.
 
 
 # =============================================================================
-# 2-2. ERROR VS DISTANCE FROM BOUNDARY (CASECOUNT, BARPLOT)
+# ERROR VS DISTANCE FROM BOUNDARY (CASECOUNT, BARPLOT)
 # =============================================================================
 
 
@@ -431,7 +430,7 @@ def plot_error_vs_boundary_distance(
             ax.set_yscale("linear")
             ax.set_ylabel("Boundary error ratio (MAE / interior MAE)")
             ax.set_xlabel("Channel")
-            ax.set_title(f"Dataset: {name}")
+            ax.set_title(f"{name}")
             ax.grid(True, which="both", axis="y", linestyle="--", alpha=0.3)
 
         ax_legend.legend(

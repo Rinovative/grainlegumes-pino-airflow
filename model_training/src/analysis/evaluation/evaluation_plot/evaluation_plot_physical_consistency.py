@@ -106,7 +106,6 @@ class ResidualCacheEntry(TypedDict):
 # =============================================================================
 # CONSTANTS
 # =============================================================================
-
 EPS = 1e-12
 
 
@@ -175,7 +174,7 @@ def _compute_divergence(u: np.ndarray, v: np.ndarray, Lx: float, Ly: float) -> n
 
 
 # =============================================================================
-# 3-1. VELOCITY DIVERGENCE
+# VELOCITY DIVERGENCE
 # =============================================================================
 
 
@@ -184,7 +183,7 @@ def plot_velocity_divergence(*, datasets: dict[str, pd.DataFrame]) -> widgets.VB
     Plot distribution of normalised velocity divergence for different datasets.
 
     Normalised divergence:  ⟨|∇·u|⟩  /  (⟨|u|⟩ / L)
-    where L = max(Lx, Ly)
+    where L = Ly (characteristic length in flow direction)
 
     Parameters
     ----------
@@ -199,6 +198,9 @@ def plot_velocity_divergence(*, datasets: dict[str, pd.DataFrame]) -> widgets.VB
     """
     names = list(datasets.keys())
 
+    # ------------------------------------------------------------
+    # Per-dataset cache (pred only)
+    # ------------------------------------------------------------
     cache: dict[str, dict[str, Any]] = {
         name: {
             "loaded_until": 0,
@@ -226,6 +228,10 @@ def plot_velocity_divergence(*, datasets: dict[str, pd.DataFrame]) -> widgets.VB
 
         """
         max_cases = int(max_cases)
+
+        # ==================================================
+        # Load data
+        # ==================================================
         for name, df in datasets.items():
             entry = cache[name]
             loaded = entry["loaded_until"]
@@ -237,100 +243,111 @@ def plot_velocity_divergence(*, datasets: dict[str, pd.DataFrame]) -> widgets.VB
 
             for _, row in df_i.iloc[loaded:max_cases].iterrows():
                 data = _load_npz(row)
+
                 pred = data["pred"]
                 gt = data["gt"]
-                kappa = data["kappa"]
-                kappa_names = data["kappa_names"]
 
                 Lx = float(row["geometry_Lx"])
                 Ly = float(row["geometry_Ly"])
-                L = max(Lx, Ly)
+                L = Ly
 
-                # ======================
-                # PRED
-                # ======================
-                p_p = pred[CHANNEL_INDICES["p"]]
+                # ---------- pred ----------
                 u_p = pred[CHANNEL_INDICES["u"]]
                 v_p = pred[CHANNEL_INDICES["v"]]
-
-                R_p = _compute_brinkman_residual(
-                    p=p_p,
-                    u=u_p,
-                    v=v_p,
-                    kappa=kappa,
-                    kappa_names=kappa_names,
-                    Lx=Lx,
-                    Ly=Ly,
-                )
-
+                div_p = _compute_divergence(u_p, v_p, Lx, Ly)
                 U_p = np.sqrt(u_p**2 + v_p**2)
-                denom_p = max(np.mean(U_p) / (L**2), 1e-6)
-                Rnorm_p = np.mean(R_p) / denom_p
+                denom_p = max(np.mean(U_p) / L, 1e-6)
 
-                if np.isfinite(Rnorm_p):
-                    entry["vals_pred"].append(float(Rnorm_p))
+                Rp = np.mean(np.abs(div_p)) / denom_p
+                if np.isfinite(Rp):
+                    entry["vals_pred"].append(float(Rp))
 
-                # ======================
-                # GT
-                # ======================
-                p_g = gt[CHANNEL_INDICES["p"]]
+                # ---------- gt ----------
                 u_g = gt[CHANNEL_INDICES["u"]]
                 v_g = gt[CHANNEL_INDICES["v"]]
-
-                R_g = _compute_brinkman_residual(
-                    p=p_g,
-                    u=u_g,
-                    v=v_g,
-                    kappa=kappa,
-                    kappa_names=kappa_names,
-                    Lx=Lx,
-                    Ly=Ly,
-                )
-
+                div_g = _compute_divergence(u_g, v_g, Lx, Ly)
                 U_g = np.sqrt(u_g**2 + v_g**2)
-                denom_g = max(np.mean(U_g) / (L**2), 1e-6)
-                Rnorm_g = np.mean(R_g) / denom_g
+                denom_g = max(np.mean(U_g) / L, 1e-6)
 
-                if np.isfinite(Rnorm_g):
-                    entry["vals_gt"].append(float(Rnorm_g))
+                Rg = np.mean(np.abs(div_g)) / denom_g
+                if np.isfinite(Rg):
+                    entry["vals_gt"].append(float(Rg))
 
             entry["loaded_until"] = max_cases
 
-        # --------------------------------------------------
-        # Plot
-        # --------------------------------------------------
+        # ==================================================
+        # Plot with GT de-duplication
+        # ==================================================
         fig = plt.figure(figsize=(9.5, 5))
-        gs = fig.add_gridspec(
-            1,
-            2,
-            width_ratios=[1.0, 0.35],
-            wspace=0.25,
-        )
+        gs = fig.add_gridspec(1, 2, width_ratios=[1.0, 0.35], wspace=0.25)
 
         ax = fig.add_subplot(gs[0, 0])
-        ax_legend = fig.add_subplot(gs[0, 1])
-        ax_legend.axis("off")
+        ax_leg = fig.add_subplot(gs[0, 1])
+        ax_leg.axis("off")
 
-        handles = []
-        labels = []
+        handles: list[Any] = []
+        labels: list[str] = []
+
+        plotted_gt_cdfs: list[np.ndarray] = []
+        gt_entries: list[tuple[Any, str]] = []  # (handle, label)
 
         for name in names:
+            # ----------------------
+            # PRED (always)
+            # ----------------------
             vals_p = np.asarray(cache[name]["vals_pred"], dtype=float)
-            vals_g = np.asarray(cache[name]["vals_gt"], dtype=float)
+            color = None
 
             if vals_p.size > 0:
                 s = np.sort(vals_p)
                 y = np.linspace(0, 1, len(s))
                 (lp,) = ax.plot(s, y, lw=2)
+                color = lp.get_color()
+
                 handles.append(lp)
                 labels.append(f"{name} (pred)")
 
-            if vals_g.size > 0:
-                s = np.sort(vals_g)
-                y = np.linspace(0, 1, len(s))
-                (lg,) = ax.plot(s, y, lw=2, ls="--")
+            # ----------------------
+            # GT (only if new)
+            # ----------------------
+            vals_g = np.asarray(cache[name]["vals_gt"], dtype=float)
+            if vals_g.size == 0:
+                continue
+
+            s_gt = np.sort(vals_g)
+
+            is_new = True
+            for prev in plotted_gt_cdfs:
+                if s_gt.shape == prev.shape and np.allclose(s_gt, prev, rtol=1e-6, atol=1e-9):
+                    is_new = False
+                    break
+
+            if is_new:
+                y_gt = np.linspace(0, 1, len(s_gt))
+                (lg,) = ax.plot(
+                    s_gt,
+                    y_gt,
+                    lw=2,
+                    ls="--",
+                    color=color if color is not None else "black",
+                )
+                plotted_gt_cdfs.append(s_gt)
+                gt_entries.append((lg, f"{name} (gt)"))
+
+        # --------------------------------------------------
+        # Legend finalisation
+        # --------------------------------------------------
+        if len(gt_entries) == 1:
+            # exactly one GT → reference
+            lg, _ = gt_entries[0]
+            lg.set_color("black")
+            handles.append(lg)
+            labels.append("Referenz (GT)")
+        else:
+            # multiple GTs → colour-coupled, interleaved
+            for lg, lbl in gt_entries:
                 handles.append(lg)
-                labels.append(f"{name} (gt)")
+                labels.append(lbl)
 
         ax.set_xscale("log")
         ax.set_xlabel(r"$\langle |\nabla \cdot \mathbf{u}| \rangle \,/\, (\langle |\mathbf{u}| \rangle / L)$")
@@ -338,20 +355,9 @@ def plot_velocity_divergence(*, datasets: dict[str, pd.DataFrame]) -> widgets.VB
         ax.set_title("Normalised velocity divergence distribution")
         ax.grid(True, which="both", linestyle="--", alpha=0.3)
 
-        ax_legend.legend(
-            handles,
-            labels,
-            title="Dataset",
-            loc="upper left",
-        )
+        ax_leg.legend(handles, labels, loc="upper left")
 
-        fig.subplots_adjust(
-            top=0.90,
-            bottom=0.15,
-            left=0.05,
-            right=0.98,
-        )
-
+        fig.subplots_adjust(top=0.90, bottom=0.15, left=0.05, right=0.98)
         return fig
 
     return util.util_plot.make_casecount_viewer(
@@ -363,7 +369,7 @@ def plot_velocity_divergence(*, datasets: dict[str, pd.DataFrame]) -> widgets.VB
 
 
 # =============================================================================
-# 3-2. MASS CONSERVATION ERROR MAP
+# MASS CONSERVATION ERROR MAP
 # =============================================================================
 def plot_mass_conservation_error_map(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
     """
@@ -476,7 +482,7 @@ def plot_mass_conservation_error_map(*, datasets: dict[str, pd.DataFrame]) -> wi
 
 
 # =============================================================================
-# 3-3. PRESSURE BOUNDARY CONSISTENCY
+# PRESSURE BOUNDARY CONSISTENCY
 # =============================================================================
 
 
@@ -497,6 +503,9 @@ def plot_pressure_bc_consistency(*, datasets: dict[str, pd.DataFrame]) -> widget
     """
     names = list(datasets.keys())
 
+    # ------------------------------------------------------------
+    # Per-dataset cache
+    # ------------------------------------------------------------
     cache: dict[str, dict[str, Any]] = {
         name: {
             "loaded_until": 0,
@@ -507,7 +516,7 @@ def plot_pressure_bc_consistency(*, datasets: dict[str, pd.DataFrame]) -> widget
 
     def _plot(max_cases: int, *, datasets: dict[str, pd.DataFrame]) -> Figure:
         """
-        Plot pressure boundary consistency CDF.
+        Plot pressure BC consistency CDF.
 
         Parameters
         ----------
@@ -523,6 +532,10 @@ def plot_pressure_bc_consistency(*, datasets: dict[str, pd.DataFrame]) -> widget
 
         """
         max_cases = int(max_cases)
+
+        # ==================================================
+        # Load data
+        # ==================================================
         for name, df in datasets.items():
             entry = cache[name]
             loaded = entry["loaded_until"]
@@ -534,67 +547,50 @@ def plot_pressure_bc_consistency(*, datasets: dict[str, pd.DataFrame]) -> widget
 
             for _, row in df_i.iloc[loaded:max_cases].iterrows():
                 data = _load_npz(row)
-                pred = data["pred"]
 
-                p = pred[0]
+                pred = data["pred"]
                 p_bc = data["p_bc"]
 
-                p_in = p[0, :]
-                bc_in = p_bc[0, :]
+                # inlet pressure (y = 0)
+                p_pred_in = pred[CHANNEL_INDICES["p"]][0, :]
+                p_bc_in = p_bc[0, :]
 
-                mismatch = np.mean(np.abs(p_in - bc_in))
-
-                entry["vals"].append(mismatch)
+                mismatch = np.mean(np.abs(p_pred_in - p_bc_in))
+                if np.isfinite(mismatch):
+                    entry["vals"].append(float(mismatch))
 
             entry["loaded_until"] = max_cases
 
-        # --------------------------------------------------
-        # Plot (legend LEFT)
-        # --------------------------------------------------
+        # ==================================================
+        # Plot
+        # ==================================================
         fig = plt.figure(figsize=(9.5, 5))
-        gs = fig.add_gridspec(
-            1,
-            2,
-            width_ratios=[1.0, 0.35],
-            wspace=0.25,
-        )
+        gs = fig.add_gridspec(1, 2, width_ratios=[1.0, 0.35], wspace=0.25)
 
         ax = fig.add_subplot(gs[0, 0])
-        ax_legend = fig.add_subplot(gs[0, 1])
-        ax_legend.axis("off")
+        ax_leg = fig.add_subplot(gs[0, 1])
+        ax_leg.axis("off")
 
-        legend_handles = []
+        handles: list[Any] = []
 
         for name in names:
-            vals = np.array(cache[name]["vals"], dtype=float)
+            vals = np.asarray(cache[name]["vals"], dtype=float)
             if vals.size == 0:
                 continue
 
             s = np.sort(vals)
             y = np.linspace(0, 1, len(s))
-
             (line,) = ax.plot(s, y, lw=2)
-            legend_handles.append(line)
+            handles.append(line)
 
-        ax.set_xlabel("|p_pred(inlet) - p_bc|")
+        ax.set_xlabel(r"$|p_{\mathrm{pred}}(\Gamma_{\mathrm{in}}) - p_{\mathrm{bc}}|$")
         ax.set_ylabel("CDF")
         ax.set_title("Pressure boundary consistency")
         ax.grid(True, which="both", linestyle="--", alpha=0.3)
 
-        ax_legend.legend(
-            legend_handles,
-            names,
-            title="Dataset",
-            loc="upper left",
-        )
+        ax_leg.legend(handles, names, loc="upper left")
 
-        fig.subplots_adjust(
-            top=0.90,
-            bottom=0.15,
-            left=0.05,
-            right=0.98,
-        )
-
+        fig.subplots_adjust(top=0.90, bottom=0.15, left=0.05, right=0.98)
         return fig
 
     return util.util_plot.make_casecount_viewer(
@@ -606,7 +602,7 @@ def plot_pressure_bc_consistency(*, datasets: dict[str, pd.DataFrame]) -> widget
 
 
 # =============================================================================
-# 3-4. DARCY-BRINKMAN OPERATOR RESIDUAL (CONSISTENT WITH PINOLoss)
+# DARCY-BRINKMAN OPERATOR RESIDUAL (CONSISTENT WITH PINOLoss)
 # =============================================================================
 
 MU_AIR = 1.8139e-5  # Pa*s, MUSS identisch zum Training sein
@@ -718,6 +714,9 @@ def plot_brinkman_residual(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox
     """
     names = list(datasets.keys())
 
+    # ------------------------------------------------------------
+    # Per-dataset cache
+    # ------------------------------------------------------------
     cache: dict[str, dict[str, Any]] = {
         name: {
             "loaded_until": 0,
@@ -746,6 +745,9 @@ def plot_brinkman_residual(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox
         """
         max_cases = int(max_cases)
 
+        # ==================================================
+        # Load data
+        # ==================================================
         for name, df in datasets.items():
             entry = cache[name]
             loaded = entry["loaded_until"]
@@ -767,9 +769,7 @@ def plot_brinkman_residual(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox
                 Ly = float(row["geometry_Ly"])
                 L = max(Lx, Ly)
 
-                # ======================
-                # PRED
-                # ======================
+                # ---------- pred ----------
                 p_p = pred[CHANNEL_INDICES["p"]]
                 u_p = pred[CHANNEL_INDICES["u"]]
                 v_p = pred[CHANNEL_INDICES["v"]]
@@ -786,14 +786,12 @@ def plot_brinkman_residual(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox
 
                 U_p = np.sqrt(u_p**2 + v_p**2)
                 denom_p = max(np.mean(U_p) / (L**2), 1e-6)
-                Rnorm_p = np.mean(R_p) / denom_p
 
-                if np.isfinite(Rnorm_p):
-                    entry["vals_pred"].append(float(Rnorm_p))
+                Rp = np.mean(R_p) / denom_p
+                if np.isfinite(Rp):
+                    entry["vals_pred"].append(float(Rp))
 
-                # ======================
-                # GT
-                # ======================
+                # ---------- gt ----------
                 p_g = gt[CHANNEL_INDICES["p"]]
                 u_g = gt[CHANNEL_INDICES["u"]]
                 v_g = gt[CHANNEL_INDICES["v"]]
@@ -810,16 +808,16 @@ def plot_brinkman_residual(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox
 
                 U_g = np.sqrt(u_g**2 + v_g**2)
                 denom_g = max(np.mean(U_g) / (L**2), 1e-6)
-                Rnorm_g = np.mean(R_g) / denom_g
 
-                if np.isfinite(Rnorm_g):
-                    entry["vals_gt"].append(float(Rnorm_g))
+                Rg = np.mean(R_g) / denom_g
+                if np.isfinite(Rg):
+                    entry["vals_gt"].append(float(Rg))
 
             entry["loaded_until"] = max_cases
 
-        # --------------------------------------------------
-        # Plot
-        # --------------------------------------------------
+        # ==================================================
+        # Plot with GT de-duplication
+        # ==================================================
         fig = plt.figure(figsize=(9.5, 5))
         gs = fig.add_gridspec(1, 2, width_ratios=[1.0, 0.35], wspace=0.25)
 
@@ -827,26 +825,69 @@ def plot_brinkman_residual(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox
         ax_leg = fig.add_subplot(gs[0, 1])
         ax_leg.axis("off")
 
-        handles = []
-        labels = []
+        handles: list[Any] = []
+        labels: list[str] = []
+
+        plotted_gt_cdfs: list[np.ndarray] = []
+        gt_entries: list[tuple[Any, str]] = []  # (handle, label)
 
         for name in names:
+            # ----------------------
+            # PRED (always)
+            # ----------------------
             vals_p = np.asarray(cache[name]["vals_pred"], dtype=float)
-            vals_g = np.asarray(cache[name]["vals_gt"], dtype=float)
+            color = None
 
             if vals_p.size > 0:
                 s = np.sort(vals_p)
                 y = np.linspace(0, 1, len(s))
                 (lp,) = ax.plot(s, y, lw=2)
+                color = lp.get_color()
+
                 handles.append(lp)
                 labels.append(f"{name} (pred)")
 
-            if vals_g.size > 0:
-                s = np.sort(vals_g)
-                y = np.linspace(0, 1, len(s))
-                (lg,) = ax.plot(s, y, lw=2, ls="--")
+            # ----------------------
+            # GT (only if new)
+            # ----------------------
+            vals_g = np.asarray(cache[name]["vals_gt"], dtype=float)
+            if vals_g.size == 0:
+                continue
+
+            s_gt = np.sort(vals_g)
+
+            is_new = True
+            for prev in plotted_gt_cdfs:
+                if s_gt.shape == prev.shape and np.allclose(s_gt, prev, rtol=1e-6, atol=1e-9):
+                    is_new = False
+                    break
+
+            if is_new:
+                y_gt = np.linspace(0, 1, len(s_gt))
+                (lg,) = ax.plot(
+                    s_gt,
+                    y_gt,
+                    lw=2,
+                    ls="--",
+                    color=color if color is not None else "black",
+                )
+                plotted_gt_cdfs.append(s_gt)
+                gt_entries.append((lg, f"{name} (gt)"))
+
+        # --------------------------------------------------
+        # Legend finalisation
+        # --------------------------------------------------
+        if len(gt_entries) == 1:
+            # exactly one GT → reference
+            lg, _ = gt_entries[0]
+            lg.set_color("black")
+            handles.append(lg)
+            labels.append("Referenz (GT)")
+        else:
+            # multiple GTs → colour-coupled, interleaved
+            for lg, lbl in gt_entries:
                 handles.append(lg)
-                labels.append(f"{name} (gt)")
+                labels.append(lbl)
 
         ax.set_xscale("log")
         ax.set_xlabel(r"$\langle R \rangle \,/\, (\langle |\mathbf{u}| \rangle / L^2)$")
@@ -854,7 +895,7 @@ def plot_brinkman_residual(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox
         ax.set_title("Normalised Darcy-Brinkman residual distribution")
         ax.grid(True, which="both", linestyle="--", alpha=0.3)
 
-        ax_leg.legend(handles, labels, title="Dataset", loc="upper left")
+        ax_leg.legend(handles, labels, loc="upper left")
 
         fig.subplots_adjust(top=0.90, bottom=0.15, left=0.05, right=0.98)
         return fig

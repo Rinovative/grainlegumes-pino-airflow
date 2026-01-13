@@ -360,7 +360,7 @@ def ui_dropdown_dataset(names: list[str]) -> widgets.Dropdown:
     return _build_dropdown(
         options=names,
         value=names[0],
-        description="Dataset:",
+        description="Select:",
         width="auto",
     )
 

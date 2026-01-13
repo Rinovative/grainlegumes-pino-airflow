@@ -1,3 +1,3 @@
-from . import evaluation_dataframe, evaluation_plot  # noqa: D104
+from . import evaluation_dataframe, evaluation_panel, evaluation_plot  # noqa: D104
 
-__all__ = ["evaluation_dataframe", "evaluation_plot"]
+__all__ = ["evaluation_dataframe", "evaluation_panel", "evaluation_plot"]

@@ -1,0 +1,213 @@
+"""
+Evaluation panel builder.
+
+Builds evaluation panels from an explicit list of sections.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from src import util
+from src.analysis import evaluation
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    import ipywidgets as widgets
+
+
+# =====================================================================
+# Section registry
+# =====================================================================
+def _build_sections(toggle: Callable[[str, Callable[..., object]], widgets.Widget]) -> dict[str, tuple[list[widgets.Widget], str]]:
+    """
+    Build the registry of available sections.
+
+    Parameters
+    ----------
+    toggle : function
+        Shortcut function to build toggles for plots.
+
+    Returns
+    -------
+    dict
+        Mapping {section_key: (list_of_toggle_widgets, tab_title)}.
+
+    """
+    return {
+        # --------------------------------------------------------------
+        "overview": (
+            [
+                toggle(
+                    "Overview: Global comparison summary",
+                    evaluation.evaluation_plot.evaluation_plot_overview_scoreboard.plot_overview_scoreboard,
+                ),
+                toggle(
+                    "Overview: Pareto (Error vs Physics)",
+                    evaluation.evaluation_plot.evaluation_plot_overview_scoreboard.plot_overview_pareto_error_vs_physics,
+                ),
+            ],
+            "Overview",
+        ),
+        # --------------------------------------------------------------
+        "global_error": (
+            [
+                toggle("1-1. Global error metrics", evaluation.evaluation_plot.evaluation_plot_global_error_analysis.plot_global_error_metrics),
+                toggle("1-2. Global error distribution", evaluation.evaluation_plot.evaluation_plot_global_error_analysis.plot_error_distribution),
+                toggle("1-3. GT vs Prediction (mean)", evaluation.evaluation_plot.evaluation_plot_global_error_analysis.plot_global_gt_vs_pred),
+                toggle("1-4. Mean error maps", evaluation.evaluation_plot.evaluation_plot_global_error_analysis.plot_mean_error_maps),
+                toggle("1-5. Std error maps", evaluation.evaluation_plot.evaluation_plot_global_error_analysis.plot_std_error_maps),
+            ],
+            "Global Error Analysis",
+        ),
+        # --------------------------------------------------------------
+        "architecture": (
+            [
+                toggle(
+                    "2-1. Error vs architecture parameters",
+                    evaluation.evaluation_plot.evaluation_plot_architecture_sensitivity.plot_error_vs_architecture_parameters,
+                ),
+                toggle(
+                    "2-2. Capacity vs performance", evaluation.evaluation_plot.evaluation_plot_architecture_sensitivity.plot_capacity_vs_performance
+                ),
+                toggle("2-3. Parameter efficiency", evaluation.evaluation_plot.evaluation_plot_architecture_sensitivity.plot_parameter_efficiency),
+            ],
+            "Architecture Sensitivity",
+        ),
+        # --------------------------------------------------------------
+        "error_decomposition": (
+            [
+                toggle("3-1. Error vs |GT| magnitude", evaluation.evaluation_plot.evaluation_plot_error_decomposition.plot_error_vs_gt_magnitude),
+                toggle(
+                    "3-2. Boundary vs interior error", evaluation.evaluation_plot.evaluation_plot_error_decomposition.plot_error_vs_boundary_distance
+                ),
+            ],
+            "Error Decomposition",
+        ),
+        # --------------------------------------------------------------
+        "physical_consistency": (
+            [
+                toggle("4-1. Velocity divergence (∇·u)", evaluation.evaluation_plot.evaluation_plot_physical_consistency.plot_velocity_divergence),
+                toggle(
+                    "4-2. Mass conservation error map",
+                    evaluation.evaluation_plot.evaluation_plot_physical_consistency.plot_mass_conservation_error_map,
+                ),
+                toggle(
+                    "4-3. Pressure boundary consistency (p_bc)",
+                    evaluation.evaluation_plot.evaluation_plot_physical_consistency.plot_pressure_bc_consistency,
+                ),
+                toggle(
+                    "4-4. Darcy-Brinkman operator residual", evaluation.evaluation_plot.evaluation_plot_physical_consistency.plot_brinkman_residual
+                ),
+            ],
+            "Physical Consistency",
+        ),
+        # --------------------------------------------------------------
+        "spectral": (
+            [
+                toggle(
+                    "5-1. Error frequency spectrum",
+                    evaluation.evaluation_plot.evaluation_plot_spectral_analysis.plot_global_error_frequency_spectrum,
+                ),
+                toggle(
+                    "5-2. Learned spectral energy per layer",
+                    evaluation.evaluation_plot.evaluation_plot_spectral_analysis.plot_learned_spectral_energy_per_layer,
+                ),
+                toggle(
+                    "5-3. Spectral capacity, demand and error",
+                    evaluation.evaluation_plot.evaluation_plot_spectral_analysis.plot_combined_spectral_analysis,
+                ),
+            ],
+            "Spectral & Representation Analysis",
+        ),
+        # --------------------------------------------------------------
+        "error_sensitivity": (
+            [
+                toggle(
+                    "6-1. Parameter-error correlation (heatmap)",
+                    evaluation.evaluation_plot.evaluation_plot_parameter_sensitivity.plot_parameter_error_heatmap,
+                ),
+                toggle(
+                    "6-2. Error vs input parameter (binned trend)",
+                    evaluation.evaluation_plot.evaluation_plot_parameter_sensitivity.plot_error_vs_parameter_trend,
+                ),
+            ],
+            "Error Sensitivity",
+        ),
+        # --------------------------------------------------------------
+        "sample_viewer": (
+            [
+                toggle("7-1. Sample GT vs Prediction", evaluation.evaluation_plot.evaluation_plot_sample_viewer.plot_sample_prediction_overview),
+                toggle(
+                    "7-2. Kappa tensor with error overlay",
+                    evaluation.evaluation_plot.evaluation_plot_sample_viewer.plot_sample_kappa_tensor_with_overlay,
+                ),
+            ],
+            "Sample Viewer",
+        ),
+        # --------------------------------------------------------------
+        "outliers": (
+            [
+                toggle(
+                    "8-1. Worst per-channel cases (tables)",
+                    evaluation.evaluation_plot.evaluation_plot_outlier_analysis.plot_outlier_tables_per_channel,
+                ),
+                toggle(
+                    "8-2. Worst per-channel cases (field plots)",
+                    evaluation.evaluation_plot.evaluation_plot_outlier_analysis.plot_outlier_cases_per_channel,
+                ),
+                toggle(
+                    "8-3. Extreme input parameters (table view)", evaluation.evaluation_plot.evaluation_plot_outlier_analysis.plot_extreme_input_table
+                ),
+                toggle(
+                    "8-4. Extreme input parameter cases (field plots)",
+                    evaluation.evaluation_plot.evaluation_plot_outlier_analysis.plot_extreme_input_cases,
+                ),
+            ],
+            "Outlier & Extreme Case Analysis",
+        ),
+    }
+
+
+# =====================================================================
+# Public API
+# =====================================================================
+def build_evaluation_panel(
+    *,
+    datasets_eval: dict,
+    title: str,
+    sections: list[str] | str = "all",
+) -> widgets.Widget:
+    """
+    Build an evaluation panel from an explicit list of sections.
+
+    Parameters
+    ----------
+    datasets_eval : dict
+        Mapping {label: eval_dataframe}
+    title : str
+        Title shown on open button
+    sections : list[str] or "all"
+        Which sections to include
+
+    """
+    toggle = util.util_nb.make_toggle_shortcut(dfs=datasets_eval)
+    registry = _build_sections(toggle)
+
+    section_keys = list(registry.keys()) if sections == "all" else sections
+
+    ui_sections = []
+    tab_titles = []
+
+    for key in section_keys:
+        plots, tab_title = registry[key]
+        ui_sections.append(util.util_nb.make_dropdown_section(plots))
+        tab_titles.append(tab_title)
+
+    return util.util_nb.make_lazy_panel_with_tabs(
+        ui_sections,
+        tab_titles=tab_titles,
+        open_btn_text=f"{title} - Open Evaluation",
+        close_btn_text="Close",
+    )

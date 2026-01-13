@@ -125,7 +125,7 @@ def _is_parameter_column(c: str) -> bool:
 
 
 # =============================================================================
-# 4.1 PARAMETER-ERROR CORRELATION — HEATMAP (ALL CHANNELS)
+# PARAMETER-ERROR CORRELATION — HEATMAP (ALL CHANNELS)
 # =============================================================================
 
 
@@ -251,7 +251,7 @@ def plot_parameter_error_heatmap(*, datasets: dict[str, pd.DataFrame]) -> widget
                         ax.text(j, i, f"{v:+.2f}", ha="center", va="center", fontsize=8)
 
         fig.colorbar(im, ax=axes.ravel().tolist(), shrink=0.85, label="Pearson correlation")
-        fig.suptitle("Parameter-error correlation per dataset")
+        fig.suptitle("Parameter-error correlation")
         return fig
 
     return util.util_plot.make_casecount_viewer(
@@ -263,7 +263,7 @@ def plot_parameter_error_heatmap(*, datasets: dict[str, pd.DataFrame]) -> widget
 
 
 # =============================================================================
-# 4.2 PARAMETER-ERROR TREND (SORTED BY EFFECT, TOP-K, PER DATASET)
+# PARAMETER-ERROR TREND (SORTED BY EFFECT, TOP-K, PER DATASET)
 # =============================================================================
 
 
@@ -460,7 +460,7 @@ def plot_error_vs_parameter_trend(*, datasets: dict[str, pd.DataFrame]) -> widge
             ax.set_yticks(y_pos)
             ax.set_xscale("log")
             ax.set_xlabel("Sensitivity on rel_l2 (P90 minus P10 of binned medians, log scale)")
-            ax.set_title(f"Dataset: {name}")
+            ax.set_title(f"{name}")
             ax.grid(True, which="both", axis="x", alpha=0.3)
 
         # --------------------------------------------------

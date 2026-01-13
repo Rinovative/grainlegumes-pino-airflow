@@ -195,7 +195,7 @@ subgraph MT[MODEL TRAINING]
         %% Dataset stack (split)
         %% -------------------------
         P4[*dataset_base.py*<br/>Data splitting:<br/>train / eval / OOD<br/>Global normalisation on full train set]
-        P5[*dataset_simulation.py*<br/>PermeabilityFlowDataset<br/>Load datasets<br/>Expose samples: x, y]
+        P5[*dataset_simulation.py*<br/>PhysicsDataset<br/>Load datasets<br/>Expose samples: x, y]
         P6[*dataset_module_flow.py*<br/>FlowModule<br/>Channel ordering and selection]
 
         %% -------------------------

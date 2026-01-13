@@ -1,7 +1,7 @@
 """
 Dataset definition for simulation-based PINO/FNO training and evaluation.
 
-This module implements the PermeabilityFlowDataset, which combines
+This module implements the PhysicsDataset, which combines
 the BaseDataset with a physics-specific FlowModule. It provides
 input/output tensors (x, y) formatted for neural operator training
 and supports both
@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     from torch import Tensor
 
 
-class PermeabilityFlowDataset(BaseDataset):
+class PhysicsDataset(BaseDataset):
     """
     Dataset for steady-state flow simulations with permeability fields.
 

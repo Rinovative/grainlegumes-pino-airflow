@@ -121,9 +121,9 @@ def create_dataloaders(
         eval_set,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
-        persistent_workers=persistent_workers,
+        num_workers=0,
+        pin_memory=False,
+        persistent_workers=False,
     )
 
     # ----------------------------------------------------------------------
@@ -142,9 +142,9 @@ def create_dataloaders(
         ood_subset,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
-        persistent_workers=persistent_workers,
+        num_workers=0,
+        pin_memory=False,
+        persistent_workers=False,
     )
 
     xs: list[Tensor] = []
@@ -154,8 +154,8 @@ def create_dataloaders(
         full_train,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
+        num_workers=0,
+        pin_memory=False,
     )
 
     for batch in full_train_loader:

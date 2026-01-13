@@ -42,7 +42,7 @@ from neuralop.models import FNO
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
-from src.dataset.dataset_simulation import PermeabilityFlowDataset
+from src.dataset.dataset_simulation import PhysicsDataset
 from src.schema.schema_training import DEFAULT_INPUTS_2D, DEFAULT_OUTPUTS_2D
 
 if TYPE_CHECKING:
@@ -253,7 +253,7 @@ def load_inference_context(
 
     processor = _load_normalizer(run_dir / "normalizer.pt", device=device)
 
-    full_dataset = PermeabilityFlowDataset(
+    full_dataset = PhysicsDataset(
         str(dataset_path),
         include_inputs=INPUT_CHANNELS,
         include_outputs=OUTPUT_CHANNELS,

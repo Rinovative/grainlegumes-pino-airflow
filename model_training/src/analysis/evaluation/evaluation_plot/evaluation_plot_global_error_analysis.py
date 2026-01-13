@@ -1,14 +1,8 @@
 """
 Global error analysis plots for PINO/FNO evaluation.
 
-This module provides high-level comparative plots across multiple datasets
-(ID and OOD) based on the aggregated evaluation DataFrames.
-
-Functions in this module are designed to be called through the notebook toggle
-shortcut, which automatically injects a dictionary of datasets:
-
-    dfs : dict[str, pandas.DataFrame]
-        Mapping dataset_name → evaluation_df
+This module provides high-level comparative plots across multiple
+evaluation groups based on aggregated evaluation DataFrames.
 """
 
 from __future__ import annotations
@@ -96,7 +90,7 @@ def _radial_frequency_spectrum(field: np.ndarray) -> tuple[np.ndarray, np.ndarra
 
 
 # =============================================================================
-# 1-1. GLOBAL ERROR METRICS
+# GLOBAL ERROR METRICS
 # =============================================================================
 
 
@@ -115,7 +109,7 @@ def plot_global_error_metrics(*, datasets: dict[str, pd.DataFrame]) -> Figure:
     Parameters
     ----------
     datasets : dict[str, pandas.DataFrame]
-        Mapping dataset_name → evaluation DataFrame.
+        Mapping label → evaluation DataFrame.
         Must contain:
             - l2
             - rel_l2
@@ -231,7 +225,7 @@ def plot_global_error_metrics(*, datasets: dict[str, pd.DataFrame]) -> Figure:
     # ============================================================
     ax_legend.axis("off")
     handles = [Line2D([0], [0], color=c, lw=8) for c in palette]
-    ax_legend.legend(handles, names, title="Dataset", loc="upper left")
+    ax_legend.legend(handles, names, loc="upper left")
 
     return fig
 
@@ -266,7 +260,7 @@ def plot_error_distribution(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBo
     Parameters
     ----------
     datasets : dict[str, pandas.DataFrame]
-        Mapping dataset_name → evaluation DataFrame.
+        Mapping label → evaluation DataFrame.
         Must contain:
             - 'npz_path' : str (path to .npz with 'gt' and 'err' arrays)
             - 'l2' : float (global L2 value per case)
@@ -453,7 +447,7 @@ def plot_error_distribution(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBo
         ax_local_rel.set_xlabel("Local relative L2 quantile")
 
         handles = [Line2D([0], [0], color=c, lw=6) for c in palette]
-        ax_legend.legend(handles, names, title="Dataset", loc="upper center")
+        ax_legend.legend(handles, names, loc="upper center")
 
         return fig
 
@@ -466,7 +460,7 @@ def plot_error_distribution(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBo
 
 
 # =============================================================================
-# 1-3. GLOBAL GT VS PRED
+# GLOBAL GT VS PRED
 # =============================================================================
 
 
@@ -608,7 +602,7 @@ def plot_global_gt_vs_pred(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox
         # ---------------------------------------------------------------------
         for col_idx, name in enumerate(names):
             axes[0][col_idx].set_title(
-                f"Dataset: {name}\n" + axes[0][col_idx].get_title(),
+                f"{name}\n" + axes[0][col_idx].get_title(),
                 fontsize=12,
                 pad=20,
             )
@@ -642,7 +636,7 @@ def plot_global_gt_vs_pred(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox
 
 
 # =============================================================================
-# 1-4. MEAN ERROR MAPS
+# MEAN ERROR MAPS
 # =============================================================================
 
 
@@ -816,7 +810,7 @@ def plot_mean_error_maps(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
                 metric = "MAE" if mode == "MAE" else "rel err [%]"
 
                 if r == 0:
-                    ax.set_title(f"Dataset: {name}\n{ch} {metric}", fontsize=12, pad=20)
+                    ax.set_title(f"{name}\n{ch} {metric}", fontsize=12, pad=20)
                 else:
                     ax.set_title(f"{ch} {metric}", fontsize=11)
 
@@ -859,7 +853,7 @@ def plot_mean_error_maps(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
 
 
 # =============================================================================
-# 1-5. STD ERROR MAPS
+# STD ERROR MAPS
 # =============================================================================
 
 
@@ -976,7 +970,7 @@ def plot_std_error_maps(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
                 im = ax.contourf(X, Y, std_map, levels=10, cmap="magma")
 
                 if r == 0:
-                    ax.set_title(f"Dataset: {name}\n{ch} STD error", fontsize=12, pad=20)
+                    ax.set_title(f"{name}\n{ch} STD error", fontsize=12, pad=20)
                 else:
                     ax.set_title(f"{ch} STD error", fontsize=11)
 
@@ -1013,58 +1007,3 @@ def plot_std_error_maps(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
         start_cases=100,
         step_size=50,
     )
-
-
-# =============================================================================
-# 1-6. ERROR FREQUENCY SPECTRUM
-# =============================================================================
-
-
-def plot_global_error_frequency_spectrum(*, datasets: dict[str, pd.DataFrame]) -> Figure:
-    """
-    Global error frequency spectrum across datasets.
-
-    This plot analyses the spectral content of prediction errors to assess
-    whether increasing dataset variability introduces new dominant spatial
-    error modes or merely scales existing structures.
-
-    Interpretation:
-        - Parallel spectra indicate identical structural error with scaled magnitude
-        - Increased high-frequency energy indicates loss of fine-scale resolution
-    """
-    palette = sns.color_palette("tab10", len(datasets))
-
-    spectra: dict[str, list[np.ndarray]] = {name: [] for name in datasets}
-    freqs: dict[str, np.ndarray] = {}
-
-    for name, df in datasets.items():
-        df_i = df.reset_index(drop=True)
-
-        for path in df_i["npz_path"]:
-            data = np.load(path)
-            err = data["err"]
-
-            # combine all channels into a single error magnitude field
-            field = np.linalg.norm(err, axis=0)
-
-            k, p = _radial_frequency_spectrum(field)
-            spectra[name].append(p)
-            freqs[name] = k
-
-    fig, ax = plt.subplots(figsize=(8, 6))
-
-    for name, color in zip(datasets.keys(), palette, strict=False):
-        arr = np.vstack(spectra[name])
-        mean_spec = np.mean(arr, axis=0)
-
-        ax.plot(freqs[name], mean_spec, lw=2, label=name, color=color)
-
-    ax.set_xscale("log")
-    ax.set_yscale("log")
-    ax.set_xlabel("Spatial frequency")
-    ax.set_ylabel("Error power")
-    ax.set_title("Global error frequency spectrum")
-    ax.grid(True, which="both", linestyle="--", alpha=0.3)
-    ax.legend(title="Dataset")
-
-    return fig

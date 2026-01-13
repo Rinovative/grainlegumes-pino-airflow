@@ -1,183 +1,298 @@
 """
-Architecture sensitivity plots for PINO/FNO/UNO evaluation.
+Architecture sensitivity plots for PINO / FNO / UNO evaluation.
 
 This module analyses how architectural design choices influence model performance.
-All plots operate purely on aggregated evaluation DataFrames and are intended for:
+Architecture parameters are extracted on-the-fly from `config.json` using the
+stored `npz_path`. No architecture metadata is stored redundantly in the
+per-case evaluation DataFrames.
 
-    - architecture comparison
-    - scaling behaviour analysis
-    - efficiency tradeoff studies
+Design principles
+-----------------
+- One model = one architecture point
+- Errors are aggregated per model (median over cases)
+- Architecture parameters are loaded from config.json via npz_path
+- Evaluation DataFrames remain case-level only
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import json
+import math
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import matplotlib.pyplot as plt
-import numpy as np
 
 if TYPE_CHECKING:
     import pandas as pd
     from matplotlib.figure import Figure
 
 
-def plot_error_vs_architecture_parameters(*, datasets: dict[str, pd.DataFrame]) -> Figure:
-    """
-    Analyse error sensitivity with respect to individual architecture parameters.
+# ======================================================================
+# Helpers: architecture extraction
+# ======================================================================
 
-    For each architecture parameter, the relationship between the parameter value
-    and the relative L2 error is visualised. Raw samples are shown as scatter points,
-    while the median trend is overlaid for clarity.
+
+def _load_arch_from_npz_path(npz_path: str | Path) -> dict[str, Any]:
+    """
+    Load architecture and physics parameters from config.json via npz_path.
 
     Parameters
     ----------
-    datasets : dict[str, pandas.DataFrame]
-        Mapping from dataset name to aggregated evaluation DataFrame.
-        Each DataFrame must contain the following columns:
-            - 'rel_l2'
-            - 'arch_hidden_channels'
-            - 'arch_n_layers'
-            - 'arch_n_modes'
+    npz_path : str | Path
+        Path to a single evaluation npz file.
 
     Returns
     -------
-    matplotlib.figure.Figure
-        Figure containing one subplot per architecture parameter.
+    dict[str, Any]
+        Architecture and physics parameters.
 
     """
-    names = list(datasets.keys())
+    npz_path_p = Path(npz_path)
 
-    arch_params = [
-        "arch_hidden_channels",
-        "arch_n_layers",
-        "arch_n_modes",
-    ]
+    # npz -> cases -> analysis -> (id|ood) -> run_dir
+    run_dir = npz_path_p.parents[3]
+    cfg_path = run_dir / "config.json"
+
+    if not cfg_path.exists():
+        msg = f"config.json not found for run: {run_dir}"
+        raise FileNotFoundError(msg)
+
+    with cfg_path.open("r", encoding="utf-8") as f:
+        cfg = json.load(f)
+
+    model_cfg = cfg.get("model", {})
+    params = model_cfg.get("model_params", {})
+    physics = cfg.get("physics", {})
+
+    arch: dict[str, Any] = {}
+
+    # ------------------------------------------------------------------
+    # Common parameters (ALL architectures)
+    # ------------------------------------------------------------------
+    arch["n_layers"] = params.get("n_layers")
+    arch["hidden_channels"] = params.get("hidden_channels")
+
+    # ------------------------------------------------------------------
+    # Spectral capacity (FNO / PI-FNO / UNO unified)
+    # ------------------------------------------------------------------
+    if "n_modes" in params and isinstance(params["n_modes"], list):
+        # FNO-style
+        mx, my = params["n_modes"]
+        arch["n_modes"] = 0.5 * (mx + my)
+
+    elif "uno_n_modes" in params and isinstance(params["uno_n_modes"], list):
+        # UNO: all layers have same modes → take first
+        mx, my = params["uno_n_modes"][0]
+        arch["n_modes"] = 0.5 * (mx + my)
+
+    # ------------------------------------------------------------------
+    # UNO-specific: U-shape scaling (REAL differentiator)
+    # ------------------------------------------------------------------
+    if "uno_scalings" in params and isinstance(params["uno_scalings"], list):
+        scales = [float(s[0]) for s in params["uno_scalings"]]
+        arch["uno_scale_mean"] = float(sum(scales) / len(scales))
+        arch["uno_scale_max"] = float(max(scales))
+
+    # ------------------------------------------------------------------
+    # Physics weights (PI models only, otherwise None)
+    # ------------------------------------------------------------------
+    arch["lambda_phys"] = physics.get("lambda_phys")
+    arch["lambda_p"] = physics.get("lambda_p")
+
+    return arch
+
+
+def _summarise_model(df: pd.DataFrame) -> dict[str, Any]:
+    """
+    Summarise model performance and architecture from evaluation DataFrame.
+
+    One model = one architecture point.
+    1. Aggregate error as median relative L2 over all cases.
+    2. Load architecture parameters from config.json via npz_path.
+    3. Return combined summary dictionary.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Evaluation DataFrame for a single model.
+
+    Returns
+    -------
+    dict[str, Any]
+        Summary dictionary with keys:
+            - "rel_l2_median": median relative L2 error over all cases
+            - architecture parameters (e.g. "n_layers", "hidden_channels", "n_modes", etc.)
+
+    """
+    if df.empty:
+        msg = "Empty evaluation DataFrame"
+        raise ValueError(msg)
+
+    npz_path = df.iloc[0]["npz_path"]
+    arch = _load_arch_from_npz_path(npz_path)
+
+    return {
+        "rel_l2_median": float(df["rel_l2"].median()),
+        **arch,
+    }
+
+
+# ======================================================================
+# Plots: architecture sensitivity
+# ======================================================================
+
+
+def plot_error_vs_architecture_parameters(*, datasets: dict[str, pd.DataFrame]) -> Figure:
+    """
+    Analyse how architecture parameters influence model error.
+
+    Parameters
+    ----------
+    datasets : dict[str, pd.DataFrame]
+        Dictionary of evaluation DataFrames per model.
+
+    Returns
+    -------
+    Figure
+        Matplotlib Figure object.
+
+    """
+    summaries = {name: _summarise_model(df) for name, df in datasets.items()}
+
+    arch_params = sorted(
+        {
+            key
+            for summary in summaries.values()
+            for key, value in summary.items()
+            if key != "rel_l2_median" and value is not None and isinstance(value, (int, float))
+        }
+    )
+
+    n_cols = 3
+    n_rows = math.ceil(len(arch_params) / n_cols)
 
     fig, axes = plt.subplots(
-        1,
-        len(arch_params),
-        figsize=(5.5 * len(arch_params), 4.5),
+        n_rows,
+        n_cols,
+        figsize=(7.5 * n_cols, 4.5 * n_rows),
+        sharey=True,
         squeeze=False,
     )
-    axes = axes[0]
 
-    for ax, param in zip(axes, arch_params, strict=False):
-        for name in names:
-            df = datasets[name]
+    axes_flat = axes.flatten()
 
-            if param not in df.columns:
+    for ax, param in zip(axes_flat, arch_params, strict=False):
+        for name, s in summaries.items():
+            if param not in s or s[param] is None:
                 continue
 
-            x = df[param].to_numpy(dtype=float)
-            y = df["rel_l2"].to_numpy(dtype=float)
+            x = float(s[param])
+            y = float(s["rel_l2_median"])
 
-            ax.scatter(x, y, alpha=0.4, s=20)
+            ax.scatter(x, y, s=60)
+            ax.annotate(name, (x, y), fontsize=8)
 
-            uniq = np.unique(x)
-            med = [np.median(y[x == u]) for u in uniq]
-            ax.plot(uniq, med, lw=2)
-
-        ax.set_xlabel(param.replace("arch_", ""))
-        ax.set_ylabel("Relative L2")
+        ax.set_xlabel(param)
         ax.set_yscale("log")
         ax.grid(True, which="both", linestyle="--", alpha=0.3)
+
+    axes_flat[0].set_ylabel("Median relative L2")
+
+    for ax in axes_flat[len(arch_params) :]:
+        ax.remove()
 
     fig.suptitle("Error vs architecture parameters")
     fig.tight_layout()
     return fig
 
 
+# ======================================================================
+# Plots: capacity vs performance
+# ======================================================================
+
+
 def plot_capacity_vs_performance(*, datasets: dict[str, pd.DataFrame]) -> Figure:
     """
     Analyse the tradeoff between model capacity and predictive performance.
 
-    A simple capacity proxy is used:
-        capacity = arch_hidden_channels x arch_n_layers x arch_n_modes
-
-    This plot helps identify diminishing returns or inefficient over-parameterisation.
+    Capacity proxy:
+        hidden_channels x n_layers x n_modes
 
     Parameters
     ----------
-    datasets : dict[str, pandas.DataFrame]
-        Mapping from dataset name to aggregated evaluation DataFrame.
-        Each DataFrame must contain:
-            - 'arch_hidden_channels'
-            - 'arch_n_layers'
-            - 'arch_n_modes'
-            - 'rel_l2'
-
-    Returns
-    -------
-    matplotlib.figure.Figure
-        Log-log scatter plot of capacity versus relative L2 error.
+    datasets : dict[str, pd.DataFrame]
+        Dictionary of evaluation DataFrames per model.
 
     """
-    fig, ax = plt.subplots(figsize=(6.5, 5))
+    fig, ax = plt.subplots(figsize=(18, 8))
 
     for name, df in datasets.items():
-        h = df["arch_hidden_channels"].to_numpy(dtype=float)
-        layer = df["arch_n_layers"].to_numpy(dtype=float)
-        m = df["arch_n_modes"].to_numpy(dtype=float)
+        s = _summarise_model(df)
 
-        capacity = h * layer * m
-        error = df["rel_l2"].to_numpy(dtype=float)
+        if not {"hidden_channels", "n_layers", "n_modes"}.issubset(s):
+            continue
 
-        ax.scatter(capacity, error, alpha=0.45, s=25, label=name)
+        capacity = float(s["hidden_channels"] * s["n_layers"] * s["n_modes"])
+        error = float(s["rel_l2_median"])
+
+        ax.scatter(capacity, error, s=60)
+        ax.annotate(name, (capacity, error), fontsize=8)
 
     ax.set_xscale("log")
     ax.set_yscale("log")
-    ax.set_xlabel("Model capacity proxy")
-    ax.set_ylabel("Relative L2")
+    ax.set_xlabel("Capacity proxy")
+    ax.set_ylabel("Median relative L2")
     ax.set_title("Capacity vs performance")
     ax.grid(True, which="both", linestyle="--", alpha=0.3)
-    ax.legend(title="Dataset")
 
     fig.tight_layout()
     return fig
+
+
+# ======================================================================
+# Plots: parameter efficiency
+# ======================================================================
 
 
 def plot_parameter_efficiency(*, datasets: dict[str, pd.DataFrame]) -> Figure:
     """
     Analyse parameter efficiency across architectures.
 
-    Efficiency is defined as:
-        efficiency = rel_l2 x num_parameters
-
-    Lower values indicate better use of parameters for achieving accuracy.
-    This plot is particularly useful for comparing architectures such as
-    FNO vs UNO under similar error regimes.
+    Parameter efficiency proxy:
+        relative L2 x (hidden_channels x n_layers x n_modes)
 
     Parameters
     ----------
-    datasets : dict[str, pandas.DataFrame]
-        Mapping from dataset name to aggregated evaluation DataFrame.
-        Each DataFrame must contain:
-            - 'rel_l2'
-            - 'num_parameters'
+    datasets : dict[str, pd.DataFrame]
+        Dictionary of evaluation DataFrames per model.
 
     Returns
     -------
-    matplotlib.figure.Figure
-        Log-log scatter plot of parameter count versus efficiency metric.
+    Figure
+        Matplotlib Figure object.
 
     """
-    fig, ax = plt.subplots(figsize=(6.5, 5))
+    fig, ax = plt.subplots(figsize=(18, 8))
 
     for name, df in datasets.items():
-        npar = df["num_parameters"].to_numpy(dtype=float)
-        err = df["rel_l2"].to_numpy(dtype=float)
+        s = _summarise_model(df)
 
-        efficiency = err * npar
+        if not {"hidden_channels", "n_layers", "n_modes"}.issubset(s):
+            continue
 
-        ax.scatter(npar, efficiency, alpha=0.45, s=25, label=name)
+        capacity = float(s["hidden_channels"] * s["n_layers"] * s["n_modes"])
+        efficiency = float(s["rel_l2_median"] * capacity)
+
+        ax.scatter(capacity, efficiency, s=60)
+        ax.annotate(name, (capacity, efficiency), fontsize=8)
 
     ax.set_xscale("log")
     ax.set_yscale("log")
-    ax.set_xlabel("Number of parameters")
-    ax.set_ylabel("Relative L2 x parameters")
+    ax.set_xlabel("Capacity proxy")
+    ax.set_ylabel("Relative L2 x capacity")
     ax.set_title("Parameter efficiency")
     ax.grid(True, which="both", linestyle="--", alpha=0.3)
-    ax.legend(title="Dataset")
 
     fig.tight_layout()
     return fig

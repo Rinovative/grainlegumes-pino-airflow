@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from matplotlib.figure import Figure
 
 # =============================================================================
-# Channels (single source of truth)
+# Channels
 # =============================================================================
 CHANNELS = list(OUTPUT_FIELDS)
 CHANNEL_INDICES = {name: i for i, name in enumerate(CHANNELS)}
@@ -144,7 +144,7 @@ def _compute_brinkman_residual(
 
 
 # =============================================================================
-# Scalar physics metric (used by overview plots)
+# Scalar physics metric
 # =============================================================================
 def _median_physics_residual(df: pd.DataFrame, max_cases: int = 100) -> float:
     """
@@ -207,7 +207,10 @@ def _median_physics_residual(df: pd.DataFrame, max_cases: int = 100) -> float:
 # =============================================================================
 def plot_overview_scoreboard(*, datasets: dict[str, pd.DataFrame]) -> Figure:
     """
-    Overview scoreboard plot comparing multiple models.
+    Overview scoreboard plot comparing multiple evaluation groups.
+
+    Each entry in `datasets` represents one comparison item
+    (e.g. model, dataset).
 
     Parameters
     ----------
@@ -239,8 +242,8 @@ def plot_overview_scoreboard(*, datasets: dict[str, pd.DataFrame]) -> Figure:
 
     norm = {}
     for k, arr in metrics.items():
-        lo, hi = np.nanmin(arr), np.nanmax(arr)
-        norm[k] = (arr - lo) / (hi - lo + EPS)
+        ref = np.nanmin(arr)  # best value (lower is better)
+        norm[k] = arr / (ref + EPS)
 
     fig_width = max(10.0, 3.5 * len(names))
     fig, ax = plt.subplots(figsize=(fig_width, 5.5))
@@ -259,8 +262,8 @@ def plot_overview_scoreboard(*, datasets: dict[str, pd.DataFrame]) -> Figure:
         ha="right",
     )
 
-    ax.set_ylabel("Normalised score (lower is better)")
-    ax.set_title("Global model comparison scoreboard")
+    ax.set_ylabel("Relative score (x best, lower is better)")
+    ax.set_title("Global comparison scoreboard\n(relative to best entry)")
     ax.grid(True, axis="y", linestyle="--", alpha=0.3)
     ax.legend()
 

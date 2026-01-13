@@ -505,7 +505,7 @@ def _plot_prediction_overview_case(
 
 
 # =============================================================================
-# 5.1 TABLE VIEW — REFERENCE INCLUDED IN TABLE
+# TABLE VIEW — REFERENCE INCLUDED IN TABLE
 # =============================================================================
 
 
@@ -628,7 +628,7 @@ def plot_outlier_tables_per_channel(*, datasets: dict[str, pd.DataFrame], k: int
 
     """
     run_btn = widgets.Button(description="Compute tables", button_style="primary", icon="play")
-    dataset_sel = widgets.Dropdown(options=list(datasets), description="Dataset:")
+    dataset_sel = widgets.Dropdown(options=list(datasets), description="Select:")
     output = widgets.Output()
 
     def _parameter_columns(df: pd.DataFrame) -> list[str]:
@@ -645,7 +645,7 @@ def plot_outlier_tables_per_channel(*, datasets: dict[str, pd.DataFrame], k: int
             _ref_case_cache[name] = _select_reference_case(df)
 
         with output:
-            display(Markdown(f"### Dataset: `{name}`"))
+            display(Markdown(f"### `{name}`"))
 
             for ch in CHANNELS:
                 display(Markdown(f"#### Channel `{ch}`"))
@@ -713,7 +713,7 @@ def plot_outlier_tables_per_channel(*, datasets: dict[str, pd.DataFrame], k: int
 
 
 # =============================================================================
-# 5.2 FIELD PLOT — WORST PER-CHANNEL (REFERENCE LAST, LAZY)
+# FIELD PLOT — WORST PER-CHANNEL (REFERENCE LAST, LAZY)
 # =============================================================================
 
 
@@ -839,7 +839,7 @@ def plot_outlier_cases_per_channel(*, datasets: dict[str, pd.DataFrame], k: int 
 
 
 # =============================================================================
-# 5.3 TABLE VIEW — EXTREME INPUT PARAMETERS
+# TABLE VIEW — EXTREME INPUT PARAMETERS
 # =============================================================================
 
 
@@ -884,7 +884,7 @@ def plot_extreme_input_table(*, datasets: dict[str, pd.DataFrame]) -> widgets.HB
 
             df_out = pd.DataFrame(rows).set_index("parameter")
 
-            display(Markdown(f"### Dataset: `{name}`"))
+            display(Markdown(f"### `{name}`"))
             display(df_out.style.format(dict.fromkeys(df_out.columns, _fmt_num)))
 
         tables.append(out)
@@ -893,7 +893,7 @@ def plot_extreme_input_table(*, datasets: dict[str, pd.DataFrame]) -> widgets.HB
 
 
 # =============================================================================
-# 5.4 FIELD PLOT — EXTREME INPUT CASES
+# FIELD PLOT — EXTREME INPUT CASES
 # =============================================================================
 
 
