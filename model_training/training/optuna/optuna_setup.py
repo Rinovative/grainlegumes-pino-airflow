@@ -113,7 +113,7 @@ def run_staged_optuna_training(
         name=config["model_name"],
         dir=os.environ["WANDB_DIR"],
         reinit=True,
-        tags=[f"study:{config['optuna_study_name']}"],
+        tags=[config["optuna_study_name"].removeprefix("optuna_"), "optuna"],
     )
 
     wandb.config.update({"status": "initialised"}, allow_val_change=True)
@@ -182,12 +182,6 @@ def run_staged_optuna_training(
 
             last_value = value
 
-            # ------------------------------------------------------------
-            # 🔄 After stage 0: rewrite W&B config with final config
-            # ------------------------------------------------------------
-            if stage_idx == 0 and wandb.run is not None:
-                wandb.run.config.update({**config}, allow_val_change=True)
-
             # ------------------------
             # Report to Optuna
             # ------------------------
@@ -236,6 +230,16 @@ def run_staged_optuna_training(
 
             latest_run = max(runs, key=lambda p: p.stat().st_mtime)
             resume_dir = latest_run.name
+
+            # ------------------------------------------------------------
+            # 🔄 After stage 0: rewrite W&B config with final config
+            # ------------------------------------------------------------
+            if stage_idx == 0 and wandb.run is not None:
+                _finalize_wandb_run(
+                    status="running",
+                    resume_dir=resume_dir,
+                    study_name=config["optuna_study_name"],
+                )
 
         # ------------------------------------------------------------
         # 🔁 Final W&B config sync (BOUND TO THIS TRIAL)

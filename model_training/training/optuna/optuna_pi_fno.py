@@ -125,6 +125,6 @@ def objective(trial: Trial) -> float:
 if __name__ == "__main__":
     run_optuna_study(
         objective=objective,
-        study_name="optuna_pi_fno",
+        study_name="optuna_PI-FNO",
         n_trials=30,
     )
