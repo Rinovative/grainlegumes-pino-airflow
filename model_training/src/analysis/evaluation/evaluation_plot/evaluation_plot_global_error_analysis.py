@@ -7,7 +7,7 @@ evaluation groups based on aggregated evaluation DataFrames.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, TypedDict, cast
+from typing import TYPE_CHECKING, Any, TypedDict
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -20,8 +20,6 @@ from src import util
 from src.schema.schema_fields import OUTPUT_FIELDS
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
-
     import ipywidgets as widgets
     import pandas as pd
     from matplotlib.axes import Axes
@@ -150,28 +148,42 @@ def plot_global_error_metrics(*, datasets: dict[str, pd.DataFrame]) -> Figure:
     ax_cdf_rel = fig.add_subplot(gs[2, 1])
 
     # ============================================================
-    # 1. VIOLINPLOTS
+    # 1. BOXPLOTS
     # ============================================================
-    parts = ax_vio_l2.violinplot(l2_vals, showmeans=True, showextrema=False)
-    bodies = cast("Iterable", parts["bodies"])
-    for body, color in zip(bodies, palette, strict=False):
-        body.set_facecolor(color)
-        body.set_edgecolor("black")
-        body.set_alpha(0.65)
+    bp = ax_vio_l2.boxplot(
+        l2_vals,
+        patch_artist=True,
+        showfliers=True,
+        medianprops={"color": "black", "linewidth": 2},
+        boxprops={"linewidth": 1.5},
+        whiskerprops={"linewidth": 1.2},
+        capprops={"linewidth": 1.2},
+    )
+    for patch, color in zip(bp["boxes"], palette, strict=False):
+        patch.set_facecolor(color)
+        patch.set_alpha(0.65)
+
     ax_vio_l2.set_xticks([])
-    ax_vio_l2.set_title("L2 - Violinplot")
+    ax_vio_l2.set_title("L2 - Boxplot")
     ax_vio_l2.set_ylabel("L2")
     ax_vio_l2.set_yscale("log")
     ax_vio_l2.grid(True, which="both", linestyle="--", alpha=0.3)
 
-    parts = ax_vio_rel.violinplot(rel_vals, showmeans=True, showextrema=False)
-    bodies = cast("Iterable", parts["bodies"])
-    for body, color in zip(bodies, palette, strict=False):
-        body.set_facecolor(color)
-        body.set_edgecolor("black")
-        body.set_alpha(0.65)
+    bp = ax_vio_rel.boxplot(
+        rel_vals,
+        patch_artist=True,
+        showfliers=True,
+        medianprops={"color": "black", "linewidth": 2},
+        boxprops={"linewidth": 1.5},
+        whiskerprops={"linewidth": 1.2},
+        capprops={"linewidth": 1.2},
+    )
+    for patch, color in zip(bp["boxes"], palette, strict=False):
+        patch.set_facecolor(color)
+        patch.set_alpha(0.65)
+
     ax_vio_rel.set_xticks([])
-    ax_vio_rel.set_title("Relative L2 - Violinplot")
+    ax_vio_rel.set_title("Relative L2 - Boxplot")
     ax_vio_rel.set_ylabel("Relative L2")
     ax_vio_rel.set_yscale("log")
     ax_vio_rel.grid(True, which="both", linestyle="--", alpha=0.3)

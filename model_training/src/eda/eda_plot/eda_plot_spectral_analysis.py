@@ -8,17 +8,22 @@ interactive spectral visualisations for simulation fields.
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.lines import Line2D
 
 from src import util
+from src.eda.eda_plot.eda_plot_case_statistics import _selected_datasets
 
 if TYPE_CHECKING:
     import ipywidgets as widgets
     import pandas as pd
     from matplotlib.figure import Figure
+
+    from src.util.util_plot_components import CheckboxGroup
 
 
 # ======================================================================
@@ -162,6 +167,60 @@ def _radial_spectrum(
 
     edges = np.linspace(kr.min(), kr.max(), n_bins + 1)
     idx = np.digitize(kr, edges) - 1
+
+    sums = np.bincount(idx, weights=ps)
+    counts = np.bincount(idx)
+
+    n = min(len(sums), len(edges) - 1)
+    E = sums[:n] / np.maximum(counts[:n], 1)
+
+    k_centres = 0.5 * (edges[:-1] + edges[1:])
+    return k_centres[:n], E
+
+
+def _directional_spectrum(
+    PSD: np.ndarray,
+    kx: np.ndarray,
+    ky: np.ndarray,
+    *,
+    axis: str,
+    n_bins: int = 200,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Compute 1D directional energy spectrum Ex(kx) or Ey(ky).
+
+    Parameters
+    ----------
+    PSD : np.ndarray
+        2D power spectral density.
+    kx, ky : np.ndarray
+        Wavenumber grids.
+    axis : {"x", "y"}
+        Direction for spectral reduction.
+    n_bins : int
+        Number of bins.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray]
+        (k_centres, E_dir)
+
+    """
+    if axis == "x":
+        k = np.abs(kx).ravel()
+    elif axis == "y":
+        k = np.abs(ky).ravel()
+    else:
+        msg = "axis must be 'x' or 'y'"
+        raise ValueError(msg)
+
+    ps = PSD.ravel()
+
+    mask = np.isfinite(k) & np.isfinite(ps)
+    k, ps = k[mask], ps[mask]
+
+    edges = np.linspace(0.0, k.max(), n_bins + 1)
+    idx = np.digitize(k, edges) - 1
 
     sums = np.bincount(idx, weights=ps)
     counts = np.bincount(idx)
@@ -365,4 +424,290 @@ def plot_spectral_vertical(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox
         datasets=datasets,
         start_idx=0,
         enable_dataset_dropdown=True,
+    )
+
+
+# ============================================================================
+# CUMULATIVE SPECTRAL ENERGY (CASECOUNT VIEWER)
+# ============================================================================
+
+
+def plot_spectral_cumulative(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
+    """
+    Plot cumulative radial spectral energy distributions.
+
+    For each field, the cumulative spectral energy E_cum(k) is computed
+    per case and aggregated across the first N cases using the median.
+    This plot is intended to guide the selection of n_modes by identifying
+    the effective spectral bandwidth of the data.
+
+    The x-axis is intentionally limited to k <= 50.
+    """
+    names = list(datasets.keys())
+
+    def _plot(
+        max_cases: int,
+        *,
+        datasets: dict[str, pd.DataFrame],
+        dataset_selector: CheckboxGroup,
+    ) -> Figure:
+        active = _selected_datasets(dataset_selector)
+
+        sample_df = datasets[active[0]]
+        field_keys = _infer_field_keys(sample_df)
+
+        n_items = len(field_keys)
+        ncols = _infer_ncols(n_items, max_cols=4)
+        nrows = math.ceil(n_items / ncols)
+
+        fig, axes = plt.subplots(
+            nrows,
+            ncols,
+            figsize=(4.6 * ncols + 2.0, 3.6 * nrows),
+            squeeze=False,
+        )
+        axes = axes.ravel()
+
+        cmap = plt.get_cmap("tab10")
+        dataset_colors = {name: cmap(i % 10) for i, name in enumerate(active)}
+
+        for ax, field in zip(axes[:n_items], field_keys, strict=True):
+            for name in active:
+                df = datasets[name].iloc[:max_cases]
+
+                E_cum_all: list[np.ndarray] = []
+                k_ref: np.ndarray | None = None
+
+                for _, row in df.iterrows():
+                    arr = np.asarray(row[field], float)
+
+                    x = np.asarray(row["x"])
+                    y = np.asarray(row["y"])
+                    dx = float(np.nanmedian(np.diff(np.unique(x))))
+                    dy = float(np.nanmedian(np.diff(np.unique(y))))
+
+                    PSD, kx, ky = _fft2_psd(arr, dx, dy)
+                    k, E = _radial_spectrum(PSD, kx, ky)
+
+                    mask = (k > 0) & (k <= 50) & np.isfinite(E)  # noqa: PLR2004
+                    if np.count_nonzero(mask) < 2:  # noqa: PLR2004
+                        continue
+
+                    k = k[mask]
+                    E = E[mask]
+
+                    E_cum = np.cumsum(E)
+                    E_cum /= E_cum[-1]
+
+                    if k_ref is None:
+                        k_ref = k
+                    else:
+                        E_cum = np.interp(k_ref, k, E_cum)
+
+                    E_cum_all.append(E_cum)
+
+                if not E_cum_all or k_ref is None:
+                    continue
+
+                E_cum_array = np.vstack(E_cum_all)
+
+                med = np.nanmedian(E_cum_array, axis=0)
+                q10 = np.nanpercentile(E_cum_array, 10, axis=0)
+                q90 = np.nanpercentile(E_cum_array, 90, axis=0)
+
+                color = dataset_colors[name]
+                ax.plot(k_ref, med, lw=2.0, color=color)
+                ax.fill_between(k_ref, q10, q90, color=color, alpha=0.25)
+
+            for lvl in (0.90, 0.95, 0.99):
+                ax.axhline(lvl, ls="--", lw=1.0, alpha=0.5)
+
+            ax.set_xlim(0.0, 50.0)
+            ax.set_ylim(0.0, 1.02)
+            ax.set_title(field)
+            ax.set_xlabel(r"Wavenumber $k$ [$\frac{1}{m}$]")
+            ax.set_ylabel(r"Cumulative energy $E_{\mathrm{cum}}$")
+            ax.grid(True, which="both", ls=":")
+
+        for ax in axes[n_items:]:
+            ax.axis("off")
+
+        legend_handles = [Line2D([], [], lw=4, color=dataset_colors[name], alpha=0.8) for name in active]
+
+        fig.legend(
+            legend_handles,
+            active,
+            title="Dataset",
+            loc="upper left",
+            bbox_to_anchor=(0.98, 0.97),
+        )
+
+        fig.suptitle(
+            f"Cumulative spectral energy (first {max_cases} cases)",
+            fontsize=12,
+        )
+        fig.subplots_adjust(top=0.95, right=0.85, wspace=0.35, hspace=0.35)
+
+        return fig
+
+    ds = util.util_plot_components.ui_checkbox_datasets(dataset_names=names)
+
+    return util.util_plot.make_casecount_viewer(
+        plot_func=_plot,
+        datasets=datasets,
+        start_cases=100,
+        step_size=50,
+        extra_widgets=[ds],
+        dataset_selector=ds,
+    )
+
+
+# ============================================================================
+# ANISOTROPIC CUMULATIVE SPECTRAL ENERGY (Ex, Ey)
+# ============================================================================
+
+
+def plot_spectral_cumulative_directional(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
+    """
+    Plot cumulative directional spectral energy Ex(kx) and Ey(ky).
+
+    For each field, cumulative energy is computed separately in x-
+    and y-direction and aggregated across the first N cases using
+    the median. This plot directly indicates anisotropic bandwidth
+    requirements for n_modes_x vs n_modes_y.
+
+    The x-axis is limited to k <= 50.
+    """
+    names = list(datasets.keys())
+
+    def _plot(
+        max_cases: int,
+        *,
+        datasets: dict[str, pd.DataFrame],
+        dataset_selector: CheckboxGroup,
+    ) -> Figure:
+        active = _selected_datasets(dataset_selector)
+
+        sample_df = datasets[active[0]]
+        field_keys = _infer_field_keys(sample_df)
+
+        nrows = len(field_keys)
+        ncols = 2
+
+        fig, axes = plt.subplots(
+            nrows,
+            ncols,
+            figsize=(9.0 + 2.0, 3.4 * nrows),
+            squeeze=False,
+        )
+
+        cmap = plt.get_cmap("tab10")
+        dataset_colors = {name: cmap(i % 10) for i, name in enumerate(active)}
+
+        for i, field in enumerate(field_keys):
+            ax_x = axes[i, 0]
+            ax_y = axes[i, 1]
+
+            for name in active:
+                df = datasets[name].iloc[:max_cases]
+
+                Ex_all: list[np.ndarray] = []
+                Ey_all: list[np.ndarray] = []
+                kx_ref: np.ndarray | None = None
+                ky_ref: np.ndarray | None = None
+
+                for _, row in df.iterrows():
+                    arr = np.asarray(row[field], float)
+
+                    x = np.asarray(row["x"])
+                    y = np.asarray(row["y"])
+                    dx = float(np.nanmedian(np.diff(np.unique(x))))
+                    dy = float(np.nanmedian(np.diff(np.unique(y))))
+
+                    PSD, kx, ky = _fft2_psd(arr, dx, dy)
+
+                    kx_v, Ex = _directional_spectrum(PSD, kx, ky, axis="x")
+                    ky_v, Ey = _directional_spectrum(PSD, kx, ky, axis="y")
+
+                    mask_x = (kx_v > 0) & (kx_v <= 50) & np.isfinite(Ex)  # noqa: PLR2004
+                    mask_y = (ky_v > 0) & (ky_v <= 50) & np.isfinite(Ey)  # noqa: PLR2004
+
+                    if np.count_nonzero(mask_x) > 2:  # noqa: PLR2004
+                        Ex = np.cumsum(Ex[mask_x])
+                        Ex /= Ex[-1]
+                        kx_v = kx_v[mask_x]
+                        Ex = Ex if kx_ref is None else np.interp(kx_ref, kx_v, Ex)
+                        kx_ref = kx_v if kx_ref is None else kx_ref
+                        Ex_all.append(Ex)
+
+                    if np.count_nonzero(mask_y) > 2:  # noqa: PLR2004
+                        Ey = np.cumsum(Ey[mask_y])
+                        Ey /= Ey[-1]
+                        ky_v = ky_v[mask_y]
+                        Ey = Ey if ky_ref is None else np.interp(ky_ref, ky_v, Ey)
+                        ky_ref = ky_v if ky_ref is None else ky_ref
+                        Ey_all.append(Ey)
+
+                color = dataset_colors[name]
+
+                if Ex_all and kx_ref is not None:
+                    Ex_arr = np.vstack(Ex_all)
+                    ax_x.plot(kx_ref, np.nanmedian(Ex_arr, axis=0), lw=2.0, color=color)
+                    ax_x.fill_between(
+                        kx_ref,
+                        np.nanpercentile(Ex_arr, 10, axis=0),
+                        np.nanpercentile(Ex_arr, 90, axis=0),
+                        color=color,
+                        alpha=0.25,
+                    )
+
+                if Ey_all and ky_ref is not None:
+                    Ey_arr = np.vstack(Ey_all)
+                    ax_y.plot(ky_ref, np.nanmedian(Ey_arr, axis=0), lw=2.0, color=color)
+                    ax_y.fill_between(
+                        ky_ref,
+                        np.nanpercentile(Ey_arr, 10, axis=0),
+                        np.nanpercentile(Ey_arr, 90, axis=0),
+                        color=color,
+                        alpha=0.25,
+                    )
+
+            for ax, title in zip((ax_x, ax_y), ("Ex(kx)", "Ey(ky)"), strict=True):
+                for lvl in (0.90, 0.95, 0.99):
+                    ax.axhline(lvl, ls="--", lw=1.0, alpha=0.5)
+
+                ax.set_xlim(0.0, 50.0)
+                ax.set_ylim(0.0, 1.02)
+                ax.set_title(f"{field} - {title}")
+                ax.set_xlabel(r"Wavenumber $k$ [$\frac{1}{m}$]")
+                ax.set_ylabel("Cumulative energy")
+                ax.grid(True, which="both", ls=":")
+
+        legend_handles = [Line2D([], [], lw=4, color=dataset_colors[name], alpha=0.8) for name in active]
+
+        fig.legend(
+            legend_handles,
+            active,
+            title="Dataset",
+            loc="upper left",
+            bbox_to_anchor=(0.98, 0.97),
+        )
+
+        fig.suptitle(
+            f"Directional cumulative spectral energy (first {max_cases} cases)",
+            fontsize=12,
+        )
+        fig.subplots_adjust(top=0.95, right=0.85, wspace=0.30, hspace=0.35)
+
+        return fig
+
+    ds = util.util_plot_components.ui_checkbox_datasets(dataset_names=names)
+
+    return util.util_plot.make_casecount_viewer(
+        plot_func=_plot,
+        datasets=datasets,
+        start_cases=100,
+        step_size=50,
+        extra_widgets=[ds],
+        dataset_selector=ds,
     )

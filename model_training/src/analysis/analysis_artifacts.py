@@ -209,6 +209,7 @@ def generate_artifacts(
     device: torch.device,
     save_root: str | Path,
     dataset_name: str,
+    max_cases: int | None = None,
 ) -> tuple[pd.DataFrame, Path]:
     """
     Run inference on all cases and generate persistent evaluation artifacts.
@@ -233,6 +234,8 @@ def generate_artifacts(
         Root directory for all generated artifacts.
     dataset_name : str
         Base name for the Parquet summary file.
+    max_cases : int or None, optional
+        Maximum number of cases to process. If None, process all cases.
 
     Returns
     -------
@@ -260,6 +263,8 @@ def generate_artifacts(
     kappa_names = detect_kappa_channels_from_inputs(DEFAULT_INPUTS_2D)
 
     for idx, batch in enumerate(loader):
+        if max_cases is not None and idx >= max_cases:
+            break
         case_id = idx + 1
 
         x = batch["x"].to(device)
@@ -280,10 +285,28 @@ def generate_artifacts(
         )
 
         # Forward pass
+        # --------------------------
+        # Inference timing per sample
+        # --------------------------
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        start_time = torch.cuda.Event(enable_timing=True) if device.type == "cuda" else None
+        end_time = torch.cuda.Event(enable_timing=True) if device.type == "cuda" else None
+
+        if device.type == "cuda" and start_time is not None:
+            start_time.record(torch.cuda.current_stream())
+
         with torch.no_grad():
             x_norm = (x - in_mean) / (in_std + 1e-12)
             y_hat_norm = model(x_norm)
             y_hat = y_hat_norm * (out_std + 1e-12) + out_mean
+
+        if device.type == "cuda" and end_time is not None:
+            end_time.record(torch.cuda.current_stream())
+            torch.cuda.synchronize()
+            inference_time_ms = start_time.elapsed_time(end_time) if start_time is not None else None
+        else:
+            inference_time_ms = None
 
         # Outputs
         p, u, v = y_hat[:, 0:1], y_hat[:, 1:2], y_hat[:, 2:3]
@@ -320,6 +343,7 @@ def generate_artifacts(
                 "npz_path": str(npz_path),
                 "l2": l2,
                 "rel_l2": rel_l2,
+                "inference_time_ms": inference_time_ms,
                 "kappa_names": kappa_names,
                 "meta": meta_clean,
             }

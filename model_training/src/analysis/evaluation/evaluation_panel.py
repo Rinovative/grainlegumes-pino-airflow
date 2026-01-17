@@ -47,6 +47,10 @@ def _build_sections(toggle: Callable[[str, Callable[..., object]], widgets.Widge
                     "Overview: Pareto (Error vs Physics)",
                     evaluation.evaluation_plot.evaluation_plot_overview_scoreboard.plot_overview_pareto_error_vs_physics,
                 ),
+                toggle(
+                    "Overview: Architecture & hyperparameter table",
+                    evaluation.evaluation_plot.evaluation_plot_overview_scoreboard.plot_overview_architecture_table,
+                ),
             ],
             "Overview",
         ),
