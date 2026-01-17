@@ -14,7 +14,8 @@ from src.util.util_metrics import RMSEOverall
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.optim.optimizer import Optimizer
 
-from training.tools.pino_loss import PINOLoss
+from training.tools.pino_loss_physical import PINOPhysicalLoss
+from training.tools.pino_loss_spectral import PINOSpectralLoss
 from training.tools.spectral_hook import SpectralEnergyHook
 from training.train_base import train_base
 
@@ -27,9 +28,12 @@ CONFIG = {
     "seed": 9,
     "device": "cuda" if torch.cuda.is_available() else "cpu",
     # --- Physics-informed training ---
-    "lambda_phys": 1e-4,
-    "lambda_p": 5e-4,
-    "phys_warmup_epochs": 200,
+    # "fft" -> PI-FNO-FFT (spectral derivatives)
+    # "ps"  -> PI-FNO-PS  (physical space derivatives)
+    "pino_loss_type": "fft",
+    "lambda_phys": 1e-3,
+    "lambda_p": 5e-3,
+    "phys_warmup_epochs": 0,
     # --- Spectral diagnostics ---
     "enable_spectral_hooks": True,
     # --- Dataset ---
@@ -43,7 +47,7 @@ CONFIG = {
     "pin_memory": True,
     "persistent_workers": True,
     # --- Training ---
-    "n_epochs": 1_000,
+    "n_epochs": 1000,
     "eval_interval": 5,  # evaluate every N epochs
     "mixed_precision": False,  # enables AMP on modern GPUs
     # --- Checkpointing & Resume ---
@@ -57,13 +61,14 @@ CONFIG = {
 
 
 def finalize_config(CONFIG: dict) -> None:
-    """Finalize the configuration by setting default values for missing keys."""
+    """Finalize and validate the configuration dictionary."""
     # Architecture
-    CONFIG.setdefault("n_modes", (48, 48))
-    CONFIG.setdefault("hidden_channels", 64)
+    CONFIG.setdefault("modes_x", 12)
+    CONFIG.setdefault("modes_y", 12)
+    CONFIG.setdefault("hidden_channels", 24)
     CONFIG.setdefault("n_layers", 4)
 
-    # Physics-informed weights
+    # Physics-informed weights (nur Existenz erzwingen)
     _ = CONFIG["lambda_phys"]
     _ = CONFIG["lambda_p"]
 
@@ -74,8 +79,13 @@ def finalize_config(CONFIG: dict) -> None:
 # --- Model ---
 def build_model(CONFIG: dict) -> FNO:
     """Build the FNO model based on the configuration."""
+    m_x = int(CONFIG["modes_x"])
+    m_y = int(CONFIG["modes_y"])
+
+    CONFIG["n_modes_xy"] = (m_x, m_y)
+
     return FNO(
-        n_modes=CONFIG["n_modes"],
+        n_modes=(m_x, m_y),
         hidden_channels=CONFIG["hidden_channels"],
         in_channels=7,
         out_channels=3,
@@ -85,19 +95,18 @@ def build_model(CONFIG: dict) -> FNO:
 
 # 🏷️ --- Model naming ---
 def build_model_name(CONFIG: dict) -> str:
-    """Build a descriptive model name based on the configuration."""
-    n_modes = CONFIG["n_modes"]
-    hidden = CONFIG["hidden_channels"]
-    layers = CONFIG["n_layers"]
+    """Build a descriptive FFT-PI-FNO model name based on the configuration."""
+    m_x, m_y = CONFIG.get("n_modes_xy", (CONFIG["modes_x"], CONFIG["modes_y"]))
+
+    loss_tag = "PI-FNO-FFT" if CONFIG.get("pino_loss_type") == "fft" else "PI-FNO-PS"
 
     parts = [
-        "PI-FNO",
-        f"m{n_modes[0]}x{n_modes[1]}",
-        f"h{hidden}",
-        f"l{layers}",
+        loss_tag,
+        f"m{m_x}x{m_y}",
+        f"h{CONFIG['hidden_channels']}",
+        f"l{CONFIG['n_layers']}",
         f"lamPhys{CONFIG['lambda_phys']:.0e}",
         f"lamP{CONFIG['lambda_p']:.0e}",
-        CONFIG["train_dataset_name"],
     ]
 
     if CONFIG.get("run_suffix") is not None:
@@ -111,7 +120,7 @@ def build_optimizer(CONFIG: dict, model: FNO) -> AdamW:
     """Build the AdamW optimizer for the model."""
     return AdamW(
         model.parameters(),
-        lr=CONFIG.get("lr", 1e-2),
+        lr=CONFIG.get("lr", 0.01),
         weight_decay=CONFIG.get("weight_decay", 1e-4),
     )
 
@@ -129,15 +138,30 @@ def build_scheduler(optimizer: Optimizer) -> ReduceLROnPlateau:
 
 
 # --- Losses ---
-def build_train_loss(CONFIG: dict) -> PINOLoss:
+def build_train_loss(CONFIG: dict) -> PINOPhysicalLoss | PINOSpectralLoss:
     """Build the physics-informed loss function for training."""
-    return PINOLoss(
-        data_loss=H1Loss(d=2),
-        lambda_phys=CONFIG["lambda_phys"],
-        lambda_p=CONFIG["lambda_p"],
-        in_normalizer=None,
-        out_normalizer=None,
-    )
+    loss_type = CONFIG.get("pino_loss_type", "fft")
+
+    if loss_type == "fft":
+        return PINOSpectralLoss(
+            data_loss=H1Loss(d=2),
+            lambda_phys=CONFIG["lambda_phys"],
+            lambda_p=CONFIG["lambda_p"],
+            in_normalizer=None,
+            out_normalizer=None,
+        )
+
+    if loss_type == "ps":
+        return PINOPhysicalLoss(
+            data_loss=H1Loss(d=2),
+            lambda_phys=CONFIG["lambda_phys"],
+            lambda_p=CONFIG["lambda_p"],
+            in_normalizer=None,
+            out_normalizer=None,
+        )
+
+    msg = f"Unknown pino_loss_type: {loss_type}"
+    raise ValueError(msg)
 
 
 eval_losses = {

@@ -23,12 +23,16 @@ def build_uno_run_name_from_config(CONFIG: dict) -> str:
     """Build a descriptive model name based on the configuration."""
     scaling_tag = "-".join(str(int(s[0]) if float(s[0]).is_integer() else s[0]).replace(".", "") for s in CONFIG["uno_scalings"])
 
+    m_x = int(CONFIG["modes_x"])
+    m_y = int(CONFIG["modes_y"])
+
     parts = [
         "UNO",
-        f"m{CONFIG['base_modes']}",
+        f"m{m_x}x{m_y}",
         f"h{CONFIG['hidden_channels']}",
         f"l{CONFIG['n_layers']}",
         f"s{scaling_tag}",
+        f"mr{CONFIG.get('mode_ratio', 0.5):.3g}".replace(".", "p"),
     ]
 
     if CONFIG.get("run_suffix") is not None:
@@ -85,10 +89,12 @@ def objective(trial: Trial) -> float:
     if trial.number == 0:
         CONFIG["uno_scalings"] = UNO_PRESETS["l5_s1-05-1-1-2"]
         CONFIG["n_layers"] = 5
-        CONFIG["base_modes"] = 48
+        CONFIG["modes_x"] = 48
+        CONFIG["modes_y"] = 48
         CONFIG["hidden_channels"] = 64
         CONFIG["lr"] = 5e-3
         CONFIG["batch_size"] = 32
+        CONFIG["mode_ratio"] = 0.5
     else:
         # ------------------------------------------------------------
         # Search space
@@ -96,10 +102,11 @@ def objective(trial: Trial) -> float:
         preset = trial.suggest_categorical("uno_preset", list(UNO_PRESETS))
         CONFIG["uno_scalings"] = UNO_PRESETS[preset]
         CONFIG["n_layers"] = len(UNO_PRESETS[preset])
-
-        CONFIG["base_modes"] = trial.suggest_categorical("base_modes", [32, 48, 64, 96, 128])
+        CONFIG["modes_x"] = trial.suggest_categorical("modes_x", [24, 32, 48, 64, 96, 128])
+        CONFIG["modes_y"] = trial.suggest_categorical("modes_y", [24, 32, 48, 64, 96, 128])
+        CONFIG["mode_ratio"] = trial.suggest_float("mode_ratio", 0.1, 0.9)
         CONFIG["hidden_channels"] = trial.suggest_categorical("hidden_channels", [32, 64, 96, 128])
-        CONFIG["lr"] = trial.suggest_float("lr", 3e-3, 1.2e-2, log=True)
+        CONFIG["lr"] = trial.suggest_float("lr", 1e-3, 1.5e-2, log=True)
         CONFIG["batch_size"] = trial.suggest_categorical("batch_size", [16, 32])
 
     # ------------------------------------------------------------
@@ -115,7 +122,7 @@ def objective(trial: Trial) -> float:
         config=CONFIG,
         run_fn=run_uno,
         metric_key="eval_overall_rmse",
-        budgets=[300, 400, 600],
+        budgets=[300, 400],
     )
 
 

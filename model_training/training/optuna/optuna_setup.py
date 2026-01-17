@@ -22,6 +22,50 @@ if TYPE_CHECKING:
 
     from optuna import Trial
 
+# ================================================================
+# 🧮 GPU memory estimation limit
+# ================================================================
+
+GPU_LIMIT_MB = 30_000
+
+
+# ================================================================
+# 🧮 Deterministic OOM precheck (FNO / PI-FNO)
+# ================================================================
+def estimate_fno_memory_mb(*, config: dict, safety: float = 2.0) -> float:
+    """
+    Estimate the GPU memory consumption of an FNO / PI-FNO model in MB.
+
+    Parameters
+    ----------
+    config : dict
+        The configuration dictionary containing model parameters.
+    safety : float, optional
+        A safety factor to account for overhead. Default is 2.0.
+
+    Returns
+    -------
+    float
+        Estimated memory consumption in MB.
+
+    """
+    batch = int(config["batch_size"])
+    hidden = int(config["hidden_channels"])
+    layers = int(config["n_layers"])
+    mx = int(config["modes_x"])
+    my = int(config["modes_y"])
+
+    bytes_per_float = 4  # float32
+
+    # activation memory (dominant term)
+    activations = batch * hidden * mx * my * layers
+
+    # parameter memory (rough, conservative)
+    params = hidden * hidden * layers
+
+    total_bytes = (activations + params) * bytes_per_float
+    return safety * total_bytes / 1024**2  # MB
+
 
 def _finalize_wandb_run(
     *,
@@ -92,6 +136,23 @@ def run_staged_optuna_training(
         The final metric value after training.
 
     """
+    # ------------------------------------------------------------
+    # 🧮 Capacity + memory logging (for DB analysis)
+    # ------------------------------------------------------------
+    capacity = config["batch_size"] * config["hidden_channels"] * config["n_layers"] * config["modes_x"] * config["modes_y"]
+
+    trial.set_user_attr("capacity", int(capacity))
+
+    est_mem = estimate_fno_memory_mb(config=config)
+    trial.set_user_attr("est_mem_mb", float(est_mem))
+
+    # ------------------------------------------------------------
+    # 🚨 OOM PRE-CHECK (before wandb / cuda / training)
+    # ------------------------------------------------------------
+    if est_mem > GPU_LIMIT_MB:
+        msg = f"OOM precheck: ~{est_mem:.0f} MB"
+        raise TrialPruned(msg)
+
     # ------------------------
     # Trial grouping metadata
     # ------------------------

@@ -1,8 +1,14 @@
 """
-Physics-Informed Loss for Stationary Incompressible Brinkman Flow.
+Physics-Informed Physical-Space Loss for Stationary Brinkman Flow with conservative mass conservation.
 
 Implements the PINO loss function consistent with COMSOL's formulation
-for simulating flow through porous media.
+for simulating flow through heterogeneous porous media.
+
+Governing equations:
+    - Momentum (Brinkman):
+        -∇p + ∇·τ - μ K^{-1} u = 0
+    - Mass conservation (conservative form):
+        ∇·(φ u) = 0
 """
 
 from collections.abc import Callable
@@ -20,7 +26,7 @@ MU_AIR = 1.8139e-5  # Pa*s, air at T = 293.15 K (COMSOL)
 
 
 # ================================================================
-# Differential operators (uniform grid assumed)
+# Differential operators (physical space, uniform grid, torch.gradient-based; not classical FD stencil)
 # ================================================================
 def grad_x(f: torch.Tensor, dx: torch.Tensor) -> torch.Tensor:
     """
@@ -69,9 +75,9 @@ def grad_y(f: torch.Tensor, dy: torch.Tensor) -> torch.Tensor:
 # ================================================================
 # PINO Loss
 # ================================================================
-class PINOLoss(nn.Module):
+class PINOPhysicalLoss(nn.Module):
     """
-    Physics-Informed Loss for stationary incompressible Brinkman flow.
+    Physics-Informed physical-space loss for stationary Brinkman flow with conservative mass conservation.
 
     Total loss:
         L = L_data
@@ -80,7 +86,8 @@ class PINOLoss(nn.Module):
 
     where
         L_data         : Data loss (e.g., L2 or H1) between predicted and true outputs.
-        L_phys         : Physics loss enforcing Brinkman equations.
+        L_phys         : Physics loss enforcing Brinkman momentum balance and
+                         conservative continuity ∇·(φ u) = 0.
         L_pressure_bc  : Loss enforcing pressure boundary conditions at inlet/outlet.
 
     Parameters
@@ -110,8 +117,8 @@ class PINOLoss(nn.Module):
         data_loss: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
         lambda_phys: float,
         lambda_p: float,
-        in_normalizer: Any,
-        out_normalizer: Any,
+        in_normalizer: Any | None = None,
+        out_normalizer: Any | None = None,
         log_every: int = 10,
     ) -> None:
         """
@@ -145,7 +152,7 @@ class PINOLoss(nn.Module):
         self.in_normalizer = in_normalizer
         self.out_normalizer = out_normalizer
         self.log_every = log_every
-        self._step = 0
+        self.step = 0
 
         # precompute indices once
         self._in_idx = {name: i for i, name in enumerate(self.input_fields)}
@@ -182,9 +189,15 @@ class PINOLoss(nn.Module):
         # ------------------------------------------------------------
         # 0) Denormalize
         # ------------------------------------------------------------
-        x_phys = self.in_normalizer.inverse_transform(x)
-        pred_phys = self.out_normalizer.inverse_transform(pred)
-        y_phys = self.out_normalizer.inverse_transform(y)
+        if self.in_normalizer is None or self.out_normalizer is None:
+            msg = "PINOPhysicalLoss: normalizers not set. Call set_normalizers(in_normalizer=..., out_normalizer=...)."
+            raise RuntimeError(msg)
+
+        in_norm = self.in_normalizer
+        out_norm = self.out_normalizer
+
+        x_phys = in_norm.inverse_transform(x)
+        pred_phys = out_norm.inverse_transform(pred)
 
         # ------------------------------------------------------------
         # 1) Outputs (physical)
@@ -236,15 +249,19 @@ class PINOLoss(nn.Module):
         dvdx = grad_x(v, dx)
         dvdy = grad_y(v, dy)
 
-        div_phi_u = grad_x(phi * u, dx) + grad_y(phi * v, dy)
+        # continuity (conservative form)
+        phi_u = phi * u
+        phi_v = phi * v
+        div_phi_u = grad_x(phi_u, dx) + grad_y(phi_v, dy)
 
         # ------------------------------------------------------------
         # 4) Brinkman operator
         # ------------------------------------------------------------
         coef = MU_AIR / phi
 
-        Kxx = coef * (2.0 * dudx) - (2.0 / 3.0) * coef * (dudx + dvdy)
-        Kyy = coef * (2.0 * dvdy) - (2.0 / 3.0) * coef * (dudx + dvdy)
+        div_u = dudx + dvdy  # divergence of superficial velocity (used in deviatoric stress)
+        Kxx = coef * (2.0 * dudx) - (2.0 / 3.0) * coef * div_u
+        Kyy = coef * (2.0 * dvdy) - (2.0 / 3.0) * coef * div_u
         Kxy = coef * (dudy + dvdx)
 
         divKx = grad_x(Kxx, dx) + grad_y(Kxy, dy)
@@ -268,8 +285,9 @@ class PINOLoss(nn.Module):
 
         Rx = -dpdx + divKx - drag_x
         Ry = -dpdy + divKy - drag_y
-        Rc = div_phi_u
 
+        # conservative mass residual
+        Rc = div_phi_u
         phys_loss = Rx.pow(2).mean() + Ry.pow(2).mean() + Rc.pow(2).mean()
 
         # ------------------------------------------------------------
@@ -282,7 +300,7 @@ class PINOLoss(nn.Module):
         outlet_mask = (y_coord - y_max).abs() <= 0.5 * dy
 
         p_inlet_loss = (p[inlet_mask] - p_bc[inlet_mask]).pow(2).mean()
-        p_outlet_loss = (p[outlet_mask].mean() - y_phys[:, 0][outlet_mask].mean()).pow(2)
+        p_outlet_loss = p[outlet_mask].mean().pow(2)
 
         p_bc_loss = p_inlet_loss + p_outlet_loss
 
@@ -299,7 +317,7 @@ class PINOLoss(nn.Module):
         # ------------------------------------------------------------
         # 8) Logging (diagnostic, non-intrusive)
         # ------------------------------------------------------------
-        if wandb.run is not None and self._step % self.log_every == 0:
+        if wandb.run is not None and self.step % self.log_every == 0:
             total_loss_val = total_loss.item()
 
             # # keep a raw det only for logging
@@ -340,7 +358,7 @@ class PINOLoss(nn.Module):
                 commit=False,
             )
 
-        self._step += 1
+        self.step += 1
         return total_loss
 
     def set_normalizers(

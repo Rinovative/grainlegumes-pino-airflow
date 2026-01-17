@@ -52,9 +52,11 @@ CONFIG = {
 
 
 def finalize_config(CONFIG: dict) -> None:
-    """Finalize the configuration by setting default values for missing keys."""
-    CONFIG.setdefault("n_modes", (12, 12))
-    CONFIG.setdefault("hidden_channels", 24)
+    """Finalize and validate the configuration dictionary."""
+    CONFIG.setdefault("modes_x", 64)
+    CONFIG.setdefault("modes_y", 64)
+
+    CONFIG.setdefault("hidden_channels", 64)
     CONFIG.setdefault("n_layers", 4)
 
 
@@ -64,8 +66,15 @@ def finalize_config(CONFIG: dict) -> None:
 # --- Model ---
 def build_model(CONFIG: dict) -> FNO:
     """Build the FNO model based on the configuration."""
+    CONFIG.setdefault("modes_x", 64)
+    CONFIG.setdefault("modes_y", 64)
+
+    m_x = int(CONFIG["modes_x"])
+    m_y = int(CONFIG["modes_y"])
+
+    CONFIG["n_modes_xy"] = (m_x, m_y)
     return FNO(
-        n_modes=CONFIG["n_modes"],
+        n_modes=(m_x, m_y),
         hidden_channels=CONFIG["hidden_channels"],
         in_channels=7,
         out_channels=3,
@@ -76,13 +85,13 @@ def build_model(CONFIG: dict) -> FNO:
 # 🏷️ --- Model naming ---
 def build_model_name(CONFIG: dict) -> str:
     """Build a descriptive model name based on the configuration."""
-    n_modes = CONFIG["n_modes"]
+    m_x, m_y = CONFIG.get("n_modes_xy", (CONFIG["modes_x"], CONFIG["modes_y"]))
     hidden = CONFIG["hidden_channels"]
     layers = CONFIG["n_layers"]
 
     parts = [
         "FNO",
-        f"m{n_modes[0]}x{n_modes[1]}",
+        f"m{m_x}x{m_y}",
         f"h{hidden}",
         f"l{layers}",
         CONFIG["train_dataset_name"],

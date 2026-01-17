@@ -20,16 +20,15 @@ if TYPE_CHECKING:
 # 🏷️ FNO model naming
 # ================================================================
 def build_fno_run_name_from_config(CONFIG: dict) -> str:
-    """Build a descriptive FNO run name based on the configuration."""
-    n_modes = CONFIG["n_modes"]
-    hidden = CONFIG["hidden_channels"]
-    layers = CONFIG["n_layers"]
+    """Build FNO model run name from configuration."""
+    m_x = int(CONFIG["modes_x"])
+    m_y = int(CONFIG["modes_y"])
 
     parts = [
         "FNO",
-        f"m{n_modes[0]}x{n_modes[1]}",
-        f"h{hidden}",
-        f"l{layers}",
+        f"m{m_x}x{m_y}",
+        f"h{CONFIG['hidden_channels']}",
+        f"l{CONFIG['n_layers']}",
     ]
 
     if CONFIG.get("run_suffix") is not None:
@@ -57,7 +56,8 @@ def objective(trial: Trial) -> float:
     # 🚑 Bootstrap trial
     # ------------------------------------------------------------
     if trial.number == 0:
-        CONFIG["n_modes"] = (128, 160)
+        CONFIG["modes_x"] = 24
+        CONFIG["modes_y"] = 32
         CONFIG["hidden_channels"] = 64
         CONFIG["n_layers"] = 3
         CONFIG["batch_size"] = 32
@@ -68,16 +68,15 @@ def objective(trial: Trial) -> float:
         # ------------------------------------------------------------
 
         # --- Spectral resolution ---
-        base_modes = trial.suggest_categorical("base_modes", [32, 48, 64, 96, 128])
-        mode_ratio = trial.suggest_categorical("mode_ratio", [1.0, 1.25, 1.5])
-        CONFIG["n_modes"] = (base_modes, int(base_modes * mode_ratio))
+        CONFIG["modes_x"] = trial.suggest_categorical("modes_x", [24, 32, 48, 64, 96, 128, 256])
+        CONFIG["modes_y"] = trial.suggest_categorical("modes_y", [24, 32, 48, 64, 96, 128, 256])
 
         # --- Model capacity ---
-        CONFIG["hidden_channels"] = trial.suggest_categorical("hidden_channels", [64, 96, 128])
+        CONFIG["hidden_channels"] = trial.suggest_categorical("hidden_channels", [32, 64, 96, 128])
         CONFIG["n_layers"] = trial.suggest_categorical("n_layers", [3, 4, 5, 6])
 
         # --- Optimization ---
-        CONFIG["lr"] = trial.suggest_float("lr", 3e-3, 1.5e-2, log=True)
+        CONFIG["lr"] = trial.suggest_float("lr", 1e-3, 1.5e-2, log=True)
 
         # --- Batch size ---
         CONFIG["batch_size"] = trial.suggest_categorical("batch_size", [16, 32])
@@ -95,7 +94,7 @@ def objective(trial: Trial) -> float:
         config=CONFIG,
         run_fn=run_fno,
         metric_key="eval_overall_rmse",
-        budgets=[300, 400, 600],
+        budgets=[300, 400],
     )
 
 

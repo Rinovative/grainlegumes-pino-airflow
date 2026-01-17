@@ -23,14 +23,21 @@ def build_pi_uno_run_name_from_config(CONFIG: dict) -> str:
     """Build a descriptive PI-UNO run name based on the configuration."""
     scaling_tag = "-".join(str(int(s[0]) if float(s[0]).is_integer() else s[0]).replace(".", "") for s in CONFIG["uno_scalings"])
 
+    m_x = int(CONFIG["modes_x"])
+    m_y = int(CONFIG["modes_y"])
+
+    loss_tag = "PI-UNO-FFT" if CONFIG.get("pino_loss_type") == "fft" else "PI-UNO-PS"
+
     parts = [
-        "PI-UNO",
-        f"m{CONFIG['base_modes']}",
+        loss_tag,
+        f"m{m_x}x{m_y}",
         f"h{CONFIG['hidden_channels']}",
         f"l{CONFIG['n_layers']}",
         f"s{scaling_tag}",
+        f"mr{CONFIG.get('mode_ratio', 0.5):.3g}".replace(".", "p"),
         f"lamPhys{CONFIG['lambda_phys']:.0e}",
         f"lamP{CONFIG['lambda_p']:.0e}",
+        CONFIG["train_dataset_name"],
     ]
 
     if CONFIG.get("run_suffix") is not None:
@@ -43,12 +50,6 @@ def build_pi_uno_run_name_from_config(CONFIG: dict) -> str:
 # Grid-safe UNO architecture presets
 # ================================================================
 UNO_PRESETS: dict[str, list[list[float]]] = {
-    "l4_s1-05-1-2": [
-        [1.0, 1.0],
-        [0.5, 0.5],
-        [1.0, 1.0],
-        [2.0, 2.0],
-    ],
     "l5_s1-05-1-1-2": [
         [1.0, 1.0],
         [0.5, 0.5],
@@ -56,10 +57,11 @@ UNO_PRESETS: dict[str, list[list[float]]] = {
         [1.0, 1.0],
         [2.0, 2.0],
     ],
-    "l6_s1-05-05-1-2-2": [
+    "l7_s1-05-05-1-1-2-2": [
         [1.0, 1.0],
         [0.5, 0.5],
         [0.5, 0.5],
+        [1.0, 1.0],
         [1.0, 1.0],
         [2.0, 2.0],
         [2.0, 2.0],
@@ -73,6 +75,8 @@ UNO_PRESETS: dict[str, list[list[float]]] = {
 def objective(trial: Trial) -> float:
     """Optuna objective function for PI-UNO hyperparameter optimization."""
     CONFIG: dict[str, object] = dict(copy.deepcopy(BASE_CONFIG))
+    # fft or ps
+    CONFIG["pino_loss_type"] = "ps"  # Set loss type for PI-FNO
 
     # ------------------------------------------------------------
     # Trial identity
@@ -85,56 +89,69 @@ def objective(trial: Trial) -> float:
     # 🚑 Bootstrap trial (stabile Referenz gegen Serien-OOM)
     # ------------------------------------------------------------
     if trial.number == 0:
-        CONFIG["uno_scalings"] = UNO_PRESETS["l5_s1-05-1-1-2"]
-        CONFIG["n_layers"] = 5
-        CONFIG["base_modes"] = 48
-        CONFIG["hidden_channels"] = 64
-        CONFIG["lr"] = 5e-3
+        CONFIG["n_layers"] = 7
+        CONFIG["hidden_channels"] = 32
+        CONFIG["modes_x"] = 64
+        CONFIG["modes_y"] = 64
+        CONFIG["mode_ratio"] = 0.4951318201313778
+        CONFIG["uno_scalings"] = [
+            [1.0, 1.0],
+            [0.5, 0.5],
+            [0.5, 0.5],
+            [1.0, 1.0],
+            [1.0, 1.0],
+            [2.0, 2.0],
+            [2.0, 2.0],
+        ]
+
+        CONFIG["lr"] = 0.008511542981479816
         CONFIG["batch_size"] = 32
-        CONFIG["lambda_phys"] = 1e-4
-        CONFIG["lambda_p"] = 1e-4
+
+        CONFIG["lambda_phys"] = 0.0001
+        CONFIG["lambda_p"] = 0.0005
         CONFIG["phys_warmup_epochs"] = 300
     else:
-        # ------------------------------------------------------------
-        # 🔍 Hyperparameter search space
-        # ------------------------------------------------------------
+        # --- Fixe Architektur (identisch zu Bootstrap) ---
+        CONFIG["n_layers"] = 7
+        CONFIG["hidden_channels"] = 32
+        CONFIG["modes_x"] = 64
+        CONFIG["modes_y"] = 64
+        CONFIG["mode_ratio"] = 0.4951318201313778
+        CONFIG["uno_scalings"] = [
+            [1.0, 1.0],
+            [0.5, 0.5],
+            [0.5, 0.5],
+            [1.0, 1.0],
+            [1.0, 1.0],
+            [2.0, 2.0],
+            [2.0, 2.0],
+        ]
 
-        # --- Grid-safe UNO presets ---
-        preset = trial.suggest_categorical("uno_preset", list(UNO_PRESETS))
-        CONFIG["uno_scalings"] = UNO_PRESETS[preset]
-        CONFIG["n_layers"] = len(UNO_PRESETS[preset])
+        CONFIG["lr"] = 0.008511542981479816
+        CONFIG["batch_size"] = 32
 
-        CONFIG["base_modes"] = trial.suggest_categorical("base_modes", [32, 48, 64, 96, 128])
-        CONFIG["hidden_channels"] = trial.suggest_categorical("hidden_channels", [32, 64, 96, 128])
-
-        # --- Optimisation ---
-        CONFIG["lr"] = trial.suggest_float("lr", 3e-3, 1.2e-2, log=True)
-
-        # --- Batch size ---
-        CONFIG["batch_size"] = trial.suggest_categorical("batch_size", [16, 32])
-
-        # --- Physics-informed weights ---
+        # --- Physics-informed weights ONLY ---
         n_layers = cast("int", CONFIG["n_layers"])
         hidden = cast("int", CONFIG["hidden_channels"])
-        base_modes = cast("int", CONFIG["base_modes"])
+        m_x = cast("int", CONFIG["modes_x"])
+        m_y = cast("int", CONFIG["modes_y"])
+        capacity = n_layers * hidden * ((m_x + m_y) / 2)
 
-        # → capacity-aware lambda_phys
-        capacity = n_layers * hidden * base_modes
-        phys_ratio = trial.suggest_float("phys_ratio", 0.5, 2.0, log=True)
-        p_ratio = trial.suggest_float("p_ratio", 0.5, 20.0, log=True)
+        phys_ratio = trial.suggest_float("phys_ratio", 0.01, 100.0, log=True)
+        p_ratio = trial.suggest_float("p_ratio", 0.01, 100.0, log=True)
 
-        lambda_phys = phys_ratio / capacity
-        lambda_p = p_ratio * lambda_phys
+        lambda_phys = float(phys_ratio) / float(capacity)
+        lambda_p = float(p_ratio) * lambda_phys
 
         CONFIG["lambda_phys"] = lambda_phys
         CONFIG["lambda_p"] = lambda_p
 
         # 🔥 Physics warmup: capacity-aware (deterministic)
         warmup = int(30 * capacity**0.5)
-        CONFIG["phys_warmup_epochs"] = int(min(max(warmup, 50), 300))
+        CONFIG["phys_warmup_epochs"] = int(min(max(warmup, 50), 600))
 
     # ------------------------------------------------------------
-    # 🏷️ FINAL run name (must be set BEFORE wandb.init)
+    # 🏷️ FINAL run name
     # ------------------------------------------------------------
     CONFIG["model_name"] = build_pi_uno_run_name_from_config(CONFIG)
 
@@ -146,7 +163,7 @@ def objective(trial: Trial) -> float:
         config=CONFIG,
         run_fn=run_pi_uno,
         metric_key="eval_overall_rmse",
-        budgets=[50, 100, 200, 300, 400, 600],
+        budgets=[100, 200, 300, 400],
     )
 
 
@@ -156,6 +173,6 @@ def objective(trial: Trial) -> float:
 if __name__ == "__main__":
     run_optuna_study(
         objective=objective,
-        study_name="optuna_PI-UNO",
+        study_name="optuna_PI-UNO-PS",
         n_trials=30,
     )

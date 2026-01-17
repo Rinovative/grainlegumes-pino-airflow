@@ -24,7 +24,7 @@ from training.train_base import train_base
 # ================================================================
 CONFIG = {
     # --- General ---
-    "run_suffix": None,
+    "run_suffix": "resumed_UNO_trial14_to_M",
     "seed": 9,
     "device": "cuda" if torch.cuda.is_available() else "cpu",
     # --- Spectral diagnostics ---
@@ -35,7 +35,7 @@ CONFIG = {
     "train_ratio": 0.8,  # fraction of dataset used for training
     "ood_fraction": 0.2,  # fraction of OOD data for evaluation
     # --- Dataloader ---
-    "batch_size": 16,
+    "batch_size": 32,
     "num_workers": 8,
     "pin_memory": True,
     "persistent_workers": True,
@@ -44,7 +44,7 @@ CONFIG = {
     "eval_interval": 5,  # evaluate every N epochs
     "mixed_precision": False,  # enables AMP on modern GPUs
     # --- Checkpointing & Resume ---
-    # "resume_from_dir": "FNO_samples_uniform_var10_N1000_20251112_153012",
+    "resume_from_dir": "M_UNO_m64x64_h32_l7_s1-05-05-1-1-2-2_mr0p4951318201313778_trial14_20260116_022222",
     # "resume_from_dir": "latest",
     # --- Logging ---
     "save_best": "eval_overall_rmse",  # metric key to monitor for best checkpoint
@@ -54,19 +54,33 @@ CONFIG = {
 
 
 def finalize_config(CONFIG: dict) -> None:
-    """Finalize the configuration by setting default values for missing keys."""
-    CONFIG.setdefault("n_layers", 4)
-    CONFIG.setdefault("hidden_channels", 64)
-    CONFIG.setdefault("base_modes", 64)
-    CONFIG.setdefault(
-        "uno_scalings",
-        [
-            [1.0, 1.0],
-            [0.5, 0.5],
-            [1.0, 1.0],
-            [2.0, 2.0],
-        ],
-    )
+    """Finalize the configuration by setting safe default values for missing keys."""
+    # --- Architecture defaults ---
+    CONFIG.setdefault("n_layers", 7)
+    CONFIG.setdefault("hidden_channels", 32)
+    CONFIG.setdefault("modes_x", 64)
+    CONFIG.setdefault("modes_y", 64)
+    CONFIG.setdefault("mode_ratio", 0.4951318201313778)
+
+    if "uno_scalings" not in CONFIG:
+        if CONFIG["n_layers"] == 5:  # noqa: PLR2004
+            CONFIG["uno_scalings"] = [
+                [1.0, 1.0],
+                [0.5, 0.5],
+                [1.0, 1.0],
+                [1.0, 1.0],
+                [2.0, 2.0],
+            ]
+        elif CONFIG["n_layers"] == 7:  # noqa: PLR2004
+            CONFIG["uno_scalings"] = [
+                [1.0, 1.0],
+                [0.5, 0.5],
+                [0.5, 0.5],
+                [1.0, 1.0],
+                [1.0, 1.0],
+                [2.0, 2.0],
+                [2.0, 2.0],
+            ]
 
 
 # ================================================================
@@ -87,10 +101,34 @@ def build_model(CONFIG: dict) -> UNOWithCheckpoint:
     """Build the U-NO model based on the configuration."""
     n_layers = CONFIG["n_layers"]
     hidden = CONFIG["hidden_channels"]
-    base_modes = CONFIG["base_modes"]
     uno_scalings = CONFIG["uno_scalings"]
 
-    uno_n_modes = [[base_modes, base_modes]] * n_layers
+    base_x = int(CONFIG["modes_x"])
+    base_y = int(CONFIG["modes_y"])
+
+    mode_ratio = float(CONFIG.get("mode_ratio", 0.5))
+
+    mid_x = max(8, int(base_x * mode_ratio))
+    mid_y = max(8, int(base_y * mode_ratio))
+
+    if n_layers == 5:  # noqa: PLR2004
+        uno_n_modes = [
+            [base_x, base_y],
+            [mid_x, mid_y],
+            [mid_x, mid_y],
+            [mid_x, mid_y],
+            [base_x, base_y],
+        ]
+    elif n_layers == 7:  # noqa: PLR2004
+        uno_n_modes = [
+            [base_x, base_y],
+            [mid_x, mid_y],
+            [mid_x, mid_y],
+            [mid_x, mid_y],
+            [mid_x, mid_y],
+            [mid_x, mid_y],
+            [base_x, base_y],
+        ]
     uno_out_channels = [hidden] * n_layers
 
     return UNOWithCheckpoint(
@@ -109,16 +147,17 @@ def build_model(CONFIG: dict) -> UNOWithCheckpoint:
 def build_model_name(CONFIG: dict, model: UNO) -> str:
     """Build a descriptive model name based on the configuration and model."""
     scaling_tag = "-".join(str(int(s[0]) if float(s[0]).is_integer() else s[0]).replace(".", "") for s in model.uno_scalings)
+    m_x = int(CONFIG["modes_x"])
+    m_y = int(CONFIG["modes_y"])
 
     parts = [
         "UNO",
-        f"m{CONFIG['base_modes']}",
+        f"m{m_x}x{m_y}",
         f"h{CONFIG['hidden_channels']}",
         f"l{CONFIG['n_layers']}",
         f"s{scaling_tag}",
-        CONFIG["train_dataset_name"],
+        f"mr{CONFIG.get('mode_ratio', 0.5):.3g}".replace(".", "p"),
     ]
-
     if CONFIG.get("run_suffix") is not None:
         parts.append(str(CONFIG["run_suffix"]))
 
@@ -130,8 +169,8 @@ def build_optimizer(CONFIG: dict, model: UNO) -> AdamW:
     """Build the AdamW optimizer for the model."""
     return AdamW(
         model.parameters(),
-        lr=CONFIG.get("lr", 5e-3),
-        weight_decay=CONFIG.get("weight_decay", 1e-4),
+        lr=CONFIG.get("lr", 0.0005319714363424885),
+        weight_decay=CONFIG.get("weight_decay", 0.0001),
     )
 
 

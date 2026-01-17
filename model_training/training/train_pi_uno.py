@@ -16,7 +16,8 @@ from src.util.util_metrics import RMSEOverall
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.optim.optimizer import Optimizer
 
-from training.tools.pino_loss import PINOLoss
+from training.tools.pino_loss_physical import PINOPhysicalLoss
+from training.tools.pino_loss_spectral import PINOSpectralLoss
 from training.tools.spectral_hook import SpectralEnergyHook
 from training.train_base import train_base
 
@@ -29,6 +30,9 @@ CONFIG = {
     "seed": 9,
     "device": "cuda" if torch.cuda.is_available() else "cpu",
     # --- Physics-informed training ---
+    # "fft" -> PI-UNO-FFT
+    # "ps"  -> PI-UNO-PS
+    "pino_loss_type": "fft",
     "lambda_phys": 1e-4,
     "lambda_p": 5e-4,
     # --- Spectral diagnostics ---
@@ -62,7 +66,9 @@ def finalize_config(CONFIG: dict) -> None:
     # Architecture
     CONFIG.setdefault("n_layers", 5)
     CONFIG.setdefault("hidden_channels", 32)
-    CONFIG.setdefault("base_modes", 128)
+    CONFIG.setdefault("modes_x", 128)
+    CONFIG.setdefault("modes_y", 128)
+    CONFIG.setdefault("mode_ratio", 0.5)
     CONFIG.setdefault(
         "uno_scalings",
         [
@@ -97,10 +103,34 @@ def build_model(CONFIG: dict) -> UNOWithCheckpoint:
     """Build the U-NO model based on the configuration."""
     n_layers = CONFIG["n_layers"]
     hidden = CONFIG["hidden_channels"]
-    base_modes = CONFIG["base_modes"]
     uno_scalings = CONFIG["uno_scalings"]
 
-    uno_n_modes = [[base_modes, base_modes]] * n_layers
+    mode_ratio = float(CONFIG.get("mode_ratio", 0.5))
+
+    base_x = int(CONFIG["modes_x"])
+    base_y = int(CONFIG["modes_y"])
+
+    mid_x = max(8, int(base_x * mode_ratio))
+    mid_y = max(8, int(base_y * mode_ratio))
+
+    if n_layers == 5:  # noqa: PLR2004
+        uno_n_modes = [
+            [base_x, base_y],
+            [mid_x, mid_y],
+            [mid_x, mid_y],
+            [mid_x, mid_y],
+            [base_x, base_y],
+        ]
+    elif n_layers == 7:  # noqa: PLR2004
+        uno_n_modes = [
+            [base_x, base_y],
+            [mid_x, mid_y],
+            [mid_x, mid_y],
+            [mid_x, mid_y],
+            [mid_x, mid_y],
+            [mid_x, mid_y],
+            [base_x, base_y],
+        ]
     uno_out_channels = [hidden] * n_layers
 
     return UNOWithCheckpoint(
@@ -120,12 +150,18 @@ def build_model_name(CONFIG: dict, model: UNO) -> str:
     """Build a descriptive model name based on the configuration."""
     scaling_tag = "-".join(str(int(s[0]) if float(s[0]).is_integer() else s[0]).replace(".", "") for s in model.uno_scalings)
 
+    m_x = int(CONFIG["modes_x"])
+    m_y = int(CONFIG["modes_y"])
+
+    loss_tag = "PI-UNO-FFT" if CONFIG.get("pino_loss_type") == "fft" else "PI-UNO-PS"
+
     parts = [
-        "PI-UNO",
-        f"m{CONFIG['base_modes']}",
+        loss_tag,
+        f"m{m_x}x{m_y}",
         f"h{CONFIG['hidden_channels']}",
         f"l{CONFIG['n_layers']}",
         f"s{scaling_tag}",
+        f"mr{CONFIG.get('mode_ratio', 0.5):.3g}".replace(".", "p"),
         f"lamPhys{CONFIG['lambda_phys']:.0e}",
         f"lamP{CONFIG['lambda_p']:.0e}",
         CONFIG["train_dataset_name"],
@@ -159,15 +195,30 @@ def build_scheduler(optimizer: Optimizer) -> ReduceLROnPlateau:
 
 
 # --- Losses ---
-def build_train_loss(CONFIG: dict) -> PINOLoss:
-    """Build the PINO loss function based on the configuration."""
-    return PINOLoss(
-        data_loss=H1Loss(d=2),
-        lambda_phys=CONFIG["lambda_phys"],
-        lambda_p=CONFIG["lambda_p"],
-        in_normalizer=None,
-        out_normalizer=None,
-    )
+def build_train_loss(CONFIG: dict) -> PINOPhysicalLoss | PINOSpectralLoss:
+    """Build the training loss function based on the configuration."""
+    loss_type = CONFIG.get("pino_loss_type", "fft")
+
+    if loss_type == "fft":
+        return PINOSpectralLoss(
+            data_loss=H1Loss(d=2),
+            lambda_phys=CONFIG["lambda_phys"],
+            lambda_p=CONFIG["lambda_p"],
+            in_normalizer=None,
+            out_normalizer=None,
+        )
+
+    if loss_type == "ps":
+        return PINOPhysicalLoss(
+            data_loss=H1Loss(d=2),
+            lambda_phys=CONFIG["lambda_phys"],
+            lambda_p=CONFIG["lambda_p"],
+            in_normalizer=None,
+            out_normalizer=None,
+        )
+
+    msg = f"Unknown pino_loss_type: {loss_type}"
+    raise ValueError(msg)
 
 
 eval_losses = {
