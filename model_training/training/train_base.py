@@ -179,6 +179,9 @@ def build_wandb_config(
             "eval_losses": {k: type(v).__name__ for k, v in eval_losses.items()},
         },
         "physics": {
+            "pino_loss_type": CONFIG.get("pino_loss_type"),
+            "grad_mode": CONFIG.get("grad_mode"),
+            "interior_pad": CONFIG.get("interior_pad"),
             "lambda_phys": CONFIG.get("lambda_phys"),
             "lambda_p": CONFIG.get("lambda_p"),
             "phys_warmup_epochs": CONFIG.get("phys_warmup_epochs"),

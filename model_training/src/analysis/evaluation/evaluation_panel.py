@@ -40,6 +40,10 @@ def _build_sections(toggle: Callable[[str, Callable[..., object]], widgets.Widge
         "overview": (
             [
                 toggle(
+                    "Overview: Summary table",
+                    evaluation.evaluation_plot.evaluation_plot_overview_scoreboard.plot_overview_global_summary_table,
+                ),
+                toggle(
                     "Overview: Global comparison summary",
                     evaluation.evaluation_plot.evaluation_plot_overview_scoreboard.plot_overview_scoreboard,
                 ),
@@ -92,17 +96,41 @@ def _build_sections(toggle: Callable[[str, Callable[..., object]], widgets.Widge
         # --------------------------------------------------------------
         "physical_consistency": (
             [
-                toggle("4-1. Velocity divergence (∇·u)", evaluation.evaluation_plot.evaluation_plot_physical_consistency.plot_velocity_divergence),
                 toggle(
-                    "4-2. Mass conservation error map",
+                    "4-1. Physical consistency summary table",
+                    evaluation.evaluation_plot.evaluation_plot_physical_consistency.plot_physical_consistency_summary_table,
+                ),
+                toggle(
+                    "4-2. Physical consistency CDF grid (2x2)",
+                    evaluation.evaluation_plot.evaluation_plot_physical_consistency.plot_physical_consistency_cdf_grid,
+                ),
+                toggle(
+                    "4-3. Velocity divergence (∇·u)",
+                    evaluation.evaluation_plot.evaluation_plot_physical_consistency.plot_velocity_divergence,
+                ),
+                toggle(
+                    "4-4. Mass conservation error map",
                     evaluation.evaluation_plot.evaluation_plot_physical_consistency.plot_mass_conservation_error_map,
                 ),
                 toggle(
-                    "4-3. Pressure boundary consistency (p_bc)",
+                    "4-5. Darcy-Brinkman operator residual",
+                    evaluation.evaluation_plot.evaluation_plot_physical_consistency.plot_brinkman_residual,
+                ),
+                toggle(
+                    "4-6. Darcy-Brinkman momentum residual map",
+                    evaluation.evaluation_plot.evaluation_plot_physical_consistency.plot_brinkman_momentum_residual_map,
+                ),
+                toggle(
+                    "4-7. Pressure drop consistency (Δp)",
+                    evaluation.evaluation_plot.evaluation_plot_physical_consistency.plot_pressure_drop_consistency,
+                ),
+                toggle(
+                    "4-8. Pressure boundary consistency (p_bc)",
                     evaluation.evaluation_plot.evaluation_plot_physical_consistency.plot_pressure_bc_consistency,
                 ),
                 toggle(
-                    "4-4. Darcy-Brinkman operator residual", evaluation.evaluation_plot.evaluation_plot_physical_consistency.plot_brinkman_residual
+                    "4-9. Porosity-weighted continuity residual map (∇·(εu))",
+                    evaluation.evaluation_plot.evaluation_plot_physical_consistency.plot_div_phi_u_error_map,
                 ),
             ],
             "Physical Consistency",
@@ -111,21 +139,20 @@ def _build_sections(toggle: Callable[[str, Callable[..., object]], widgets.Widge
         "spectral": (
             [
                 toggle(
-                    "5-1. Error frequency spectrum",
-                    evaluation.evaluation_plot.evaluation_plot_spectral_analysis.plot_global_error_frequency_spectrum,
+                    "5-1. Demand vs prediction + error",
+                    evaluation.evaluation_plot.evaluation_plot_spectral_analysis.plot_spectral_demand_prediction_error,
                 ),
                 toggle(
-                    "5-2. Learned spectral energy per layer",
-                    evaluation.evaluation_plot.evaluation_plot_spectral_analysis.plot_learned_spectral_energy_per_layer,
+                    "5-2. Spectral transfer ratio (Pred/GT)",
+                    evaluation.evaluation_plot.evaluation_plot_spectral_analysis.plot_spectral_transfer_ratio,
                 ),
                 toggle(
-                    "5-3. Spectral capacity, demand and error",
-                    evaluation.evaluation_plot.evaluation_plot_spectral_analysis.plot_combined_spectral_analysis,
+                    "5-3. Learned layer x frequency heatmap",
+                    evaluation.evaluation_plot.evaluation_plot_spectral_analysis.plot_learned_layer_frequency_heatmap,
                 ),
             ],
             "Spectral & Representation Analysis",
         ),
-        # --------------------------------------------------------------
         "error_sensitivity": (
             [
                 toggle(
@@ -201,12 +228,14 @@ def build_evaluation_panel(
 
     section_keys = list(registry.keys()) if sections == "all" else sections
 
+    export_state = {"fig": None, "plot_name": None, "title": None}
+
     ui_sections = []
     tab_titles = []
 
     for key in section_keys:
         plots, tab_title = registry[key]
-        ui_sections.append(util.util_nb.make_dropdown_section(plots))
+        ui_sections.append(util.util_nb.make_dropdown_section(plots, export_state=export_state))
         tab_titles.append(tab_title)
 
     return util.util_nb.make_lazy_panel_with_tabs(
@@ -214,4 +243,7 @@ def build_evaluation_panel(
         tab_titles=tab_titles,
         open_btn_text=f"{title} - Open Evaluation",
         close_btn_text="Close",
+        export_state=export_state,
+        export_dir="",
+        export_btn_text="Export PDF",
     )

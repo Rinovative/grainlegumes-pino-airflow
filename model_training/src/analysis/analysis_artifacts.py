@@ -34,6 +34,13 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pandas as pd
 import torch
+from torch import nn
+from training.tools.pino_brinkman_losses import (
+    PINOPhysicalLossDiv,
+    PINOPhysicalLossPhi,
+    PINOSpectralLossDiv,
+    PINOSpectralLossPhi,
+)
 
 from src.schema.schema_kappa import INTERNAL_KAPPA_2D_ORDER, INTERNAL_KAPPA_3D_ORDER
 from src.schema.schema_training import DEFAULT_INPUTS_2D
@@ -43,10 +50,11 @@ if TYPE_CHECKING:
 
 
 # ============================================================================
-# Kappa channel definitions
+# Global constants
 # ============================================================================
 
 INTERNAL_KAPPA_NAMES = set(INTERNAL_KAPPA_2D_ORDER) | set(INTERNAL_KAPPA_3D_ORDER)
+MU_AIR = 1.8139e-5  # must be consistent with training
 
 # =============================================================================
 # JSON / type normalisation utilities
@@ -184,11 +192,10 @@ def extract_kappa(
     kappa_phys[:, name_to_pos["kxx"]] = kxx
     kappa_phys[:, name_to_pos["kyy"]] = kyy
 
-    # kxy (relative → physical)
+    # kxy is stored as kxy_hat (dimensionless). Keep it as is.
     if "kxy" in name_to_pos:
-        kxy_rel = kappa_log[:, name_to_pos["kxy"]]  # dimensionless
-        kxy = kxy_rel * torch.sqrt(kxx * kyy)
-        kappa_phys[:, name_to_pos["kxy"]] = kxy
+        kxy_hat = kappa_log[:, name_to_pos["kxy"]]
+        kappa_phys[:, name_to_pos["kxy"]] = kxy_hat
 
     return {
         "kappa_log": kappa_log,
@@ -196,12 +203,47 @@ def extract_kappa(
     }
 
 
+# ============================================================================
+# Physics term computations
+# ============================================================================
+
+
+def _infer_variant_from_run_dir(run_dir_name: str) -> tuple[str, str]:
+    """
+    Return (deriv_backend, continuity).
+
+        PS -> physical derivatives
+        SP -> spectral derivatives (reflect-FFT)
+        divu -> div(u)
+        divepsu / divεsu -> div(phi u)
+    """
+    name = run_dir_name.lower()
+
+    if "-ps" in name or "_ps" in name:
+        deriv_backend = "physical"
+    elif "-sp" in name or "_sp" in name:
+        deriv_backend = "spectral"
+    else:
+        deriv_backend = "physical"
+
+    # --- continuity: divu vs divepsu (hart) ---
+    if "divu" in name:
+        continuity = "div"
+    elif "divepsu" in name or "divεsu" in name:
+        continuity = "phi"
+    else:
+        # fallback
+        continuity = "phi"
+
+    return deriv_backend, continuity
+
+
 # =============================================================================
 # Main artifact generator
 # =============================================================================
 
 
-def generate_artifacts(
+def generate_artifacts(  # noqa: PLR0915
     *,
     model: Any,
     loader: DataLoader,
@@ -248,6 +290,57 @@ def generate_artifacts(
     model.eval()
 
     save_root = Path(save_root)
+
+    # Infer run_dir from save_root (.../processed/<run>/analysis/...)
+    run_dir = save_root
+    while run_dir.name not in {"processed", ""} and not (run_dir / "best_model_state_dict.pt").exists():
+        if run_dir.parent == run_dir:
+            break
+        run_dir = run_dir.parent
+
+    run_name = run_dir.name
+    deriv_backend, continuity = _infer_variant_from_run_dir(run_name)
+
+    ps_sp = "PS" if deriv_backend == "physical" else "SP"
+    cont_tag = "divu" if continuity == "div" else "divepsu"
+    physics_variant = f"{cont_tag}-{ps_sp}"
+
+    print(
+        "[ARTIFACTS]",
+        f"save_root={save_root}",
+        f"run_dir={run_dir}",
+        f"run_name={run_name}",
+        f"variant={physics_variant}",
+        sep="\n  - ",
+    )
+
+    # --------------------------------------------------
+    # Build exact residual calculator (same as training loss)
+    # --------------------------------------------------
+    def _zero_data_loss(pred: torch.Tensor, y: torch.Tensor) -> torch.Tensor:  # noqa: ARG001
+        return pred.new_zeros(())
+
+    loss_cls: type[nn.Module]
+
+    if deriv_backend == "physical" and continuity == "div":
+        loss_cls = PINOPhysicalLossDiv
+    elif deriv_backend == "physical" and continuity == "phi":
+        loss_cls = PINOPhysicalLossPhi
+    elif deriv_backend == "spectral" and continuity == "div":
+        loss_cls = PINOSpectralLossDiv
+    else:  # spectral + phi
+        loss_cls = PINOSpectralLossPhi
+    print(f"[ARTIFACTS] Using loss_cls={loss_cls.__name__}")
+
+    loss_obj = loss_cls(
+        data_loss=_zero_data_loss,
+        lambda_phys=1.0,
+        lambda_p=0.0,
+        in_normalizer=processor.in_normalizer,
+        out_normalizer=processor.out_normalizer,
+    ).to(device)
+    loss_obj.eval()
+
     npz_dir = save_root / "npz"
     npz_dir.mkdir(parents=True, exist_ok=True)
 
@@ -301,6 +394,29 @@ def generate_artifacts(
             y_hat_norm = model(x_norm)
             y_hat = y_hat_norm * (out_std + 1e-12) + out_mean
 
+        # --------------------------------------------------
+        # Exact training-consistent physics diagnostics
+        # (works in normalized space)
+        # --------------------------------------------------
+        with torch.no_grad():
+            diag = loss_obj.compute_diagnostics(y_hat_norm, x=x_norm)
+
+        mom_mse = float(diag["mom_mse"].detach().cpu().item())
+        cont_mse = float(diag["cont_mse"].detach().cpu().item())
+        bc_mse = float(diag["bc_mse"].detach().cpu().item())
+
+        # Optional extra diagnostics (often useful)
+        mom_mse_full = float(diag["mom_mse_full"].detach().cpu().item())
+        cont_mse_full = float(diag["cont_mse_full"].detach().cpu().item())
+
+        Rx_np = diag["Rx"].detach().cpu().squeeze(0).squeeze(0).numpy()
+        Ry_np = diag["Ry"].detach().cpu().squeeze(0).squeeze(0).numpy()
+        Rc_np = diag["Rc"].detach().cpu().squeeze(0).squeeze(0).numpy()
+        divu_np = diag["div_u"].detach().cpu().squeeze(0).squeeze(0).numpy()
+        divphiu_np = diag["div_phi_u"].detach().cpu().squeeze(0).squeeze(0).numpy()
+        cont_mse_divu = float(np.mean(divu_np**2))
+        cont_mse_divepsu = float(np.mean(divphiu_np**2))
+
         if device.type == "cuda" and end_time is not None:
             end_time.record(torch.cuda.current_stream())
             torch.cuda.synchronize()
@@ -322,8 +438,24 @@ def generate_artifacts(
         l2 = torch.linalg.norm(err).item()
         rel_l2 = l2 / (torch.linalg.norm(y_ext).item() + 1e-12)
 
+        idx_x = DEFAULT_INPUTS_2D.index("x")
+        idx_y = DEFAULT_INPUTS_2D.index("y")
+        dx = float((x[0, idx_x, 0, 1] - x[0, idx_x, 0, 0]).abs().detach().cpu().item())
+        dy = float((x[0, idx_y, 1, 0] - x[0, idx_y, 0, 0]).abs().detach().cpu().item())
+
+        derr_dy, derr_dx = torch.gradient(err, spacing=(dy, dx), dim=(2, 3))
+        h1_sq = (err.pow(2) + derr_dx.pow(2) + derr_dy.pow(2)).mean()
+        h1 = h1_sq.sqrt().item()
+
+        dy_ref, dx_ref = torch.gradient(y_ext, spacing=(dy, dx), dim=(2, 3))
+        h1_ref_sq = (y_ext.pow(2) + dx_ref.pow(2) + dy_ref.pow(2)).mean()
+        rel_h1 = h1 / (h1_ref_sq.sqrt().item() + 1e-12)
+
         # Write NPZ artifact
         npz_path = npz_dir / f"case_{case_id:04d}.npz"
+        x_raw = x.squeeze(0).detach().cpu().numpy()  # (C_in,H,W)
+        y_raw = y.squeeze(0).detach().cpu().numpy()  # (C_out,H,W)
+
         np.savez_compressed(
             npz_path,
             pred=y_hat_ext.squeeze(0).cpu().numpy(),
@@ -334,21 +466,39 @@ def generate_artifacts(
             kappa_names=np.array(kappa_names, dtype=object),
             p_bc=p_bc.squeeze(0).numpy(),
             meta=json.dumps(meta_clean),
+            x_raw=x_raw,
+            y_raw=y_raw,
+            input_fields=np.array(DEFAULT_INPUTS_2D, dtype=object),
+            physics_variant=np.array(physics_variant, dtype=object),
+            Rx=Rx_np,
+            Ry=Ry_np,
+            Rc=Rc_np,
+            div_u=divu_np,
+            div_phi_u=divphiu_np,
         )
 
         # Parquet row (scalar metrics + metadata only)
         rows.append(
             {
+                "inference_time_ms": inference_time_ms,
                 "case_index": case_id,
                 "npz_path": str(npz_path),
                 "l2": l2,
                 "rel_l2": rel_l2,
-                "inference_time_ms": inference_time_ms,
+                "h1": h1,
+                "rel_h1": rel_h1,
                 "kappa_names": kappa_names,
-                "meta": meta_clean,
+                "physics_variant": physics_variant,
+                "mom_mse": mom_mse,
+                "cont_mse": cont_mse,
+                "cont_mse_divu": cont_mse_divu,
+                "cont_mse_divepsu": cont_mse_divepsu,
+                "mom_mse_full": mom_mse_full,
+                "cont_mse_full": cont_mse_full,
+                "bc_mse": bc_mse,
+                "meta": json.dumps(meta_clean),
             }
         )
-
     df = pd.DataFrame(rows)
     parquet_path = save_root / f"{dataset_name}.parquet"
     parquet_path.parent.mkdir(parents=True, exist_ok=True)

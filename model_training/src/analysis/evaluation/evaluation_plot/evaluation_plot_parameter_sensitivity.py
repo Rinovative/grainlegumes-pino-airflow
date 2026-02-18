@@ -33,6 +33,14 @@ class _CheckboxGroupProto(Protocol):
 
 CHANNELS = ["p", "u", "v", "U"]
 EPS = 1e-12
+DROP_PARAMETER_SUBSTRINGS = (
+    "phi_max_global",
+    "phi_min_global",
+)
+
+
+def _drop_parameter_column(c: str) -> bool:
+    return any(s in c for s in DROP_PARAMETER_SUBSTRINGS)
 
 
 # =============================================================================
@@ -108,7 +116,7 @@ def _rel_l2(err: np.ndarray, gt: np.ndarray) -> float:
 
 def _is_parameter_column(c: str) -> bool:
     """
-    Check if a column name corresponds to a parameter.
+    Check if a column name corresponds to a parameter column.
 
     Parameters
     ----------
@@ -122,6 +130,29 @@ def _is_parameter_column(c: str) -> bool:
 
     """
     return c.startswith("par_") or (c.startswith("generator_") and "_parameters_" in c)
+
+
+def _clean_param_name(name: str) -> str:
+    """
+    Clean parameter column name for display.
+
+    Parameters
+    ----------
+    name : str
+        Original parameter column name.
+
+    Returns
+    -------
+    str
+        Cleaned parameter name.
+
+    """
+    s = name.replace("generator", "").replace("parameters", "")
+
+    while "__" in s:
+        s = s.replace("__", "_")
+
+    return s.strip("_")
 
 
 # =============================================================================
@@ -170,6 +201,9 @@ def plot_parameter_error_heatmap(*, datasets: dict[str, pd.DataFrame]) -> widget
         # common parameter columns
         # --------------------------------------------------
         par_cols = sorted(set.intersection(*[{c for c in df.columns if _is_parameter_column(c)} for df in datasets.values()]))
+
+        # rauswerfen (z.B. phi_min/max_global)
+        par_cols = [c for c in par_cols if not _drop_parameter_column(c)]
 
         if not par_cols:
             msg = "No common par_* columns found across datasets."
@@ -228,6 +262,8 @@ def plot_parameter_error_heatmap(*, datasets: dict[str, pd.DataFrame]) -> widget
             sharey=True,
         )
 
+        par_labels = [_clean_param_name(p) for p in par_cols]
+
         for ax, (name, corr) in zip(axes[0], corrs.items(), strict=False):
             im = ax.imshow(
                 corr.to_numpy(),
@@ -240,7 +276,7 @@ def plot_parameter_error_heatmap(*, datasets: dict[str, pd.DataFrame]) -> widget
             ax.set_xticks(np.arange(len(CHANNELS)))
             ax.set_xticklabels([f"rel_l2[{ch}]" for ch in CHANNELS])
             ax.set_yticks(np.arange(len(par_cols)))
-            ax.set_yticklabels(par_cols)
+            ax.set_yticklabels(par_labels)
             ax.set_title(name)
 
             corr_values = corr.to_numpy(dtype=float)
@@ -287,6 +323,8 @@ def plot_error_vs_parameter_trend(*, datasets: dict[str, pd.DataFrame]) -> widge
     # --------------------------------------------------
     first_df = next(iter(datasets.values()))
     par_cols = [c for c in first_df.columns if _is_parameter_column(c)]
+    par_cols = [c for c in par_cols if not _drop_parameter_column(c)]
+
     if not par_cols:
         msg = "No par_* columns found."
         raise ValueError(msg)
@@ -463,10 +501,9 @@ def plot_error_vs_parameter_trend(*, datasets: dict[str, pd.DataFrame]) -> widge
             ax.set_title(f"{name}")
             ax.grid(True, which="both", axis="x", alpha=0.3)
 
-        # --------------------------------------------------
         # y-axis labels: set ONCE, then hide on others
-        # --------------------------------------------------
-        axes[0].set_yticklabels(shown_params)
+        shown_param_labels = [_clean_param_name(p) for p in shown_params]
+        axes[0].set_yticklabels(shown_param_labels)
         axes[0].tick_params(axis="y", labelleft=True)
 
         for ax in axes[1:]:

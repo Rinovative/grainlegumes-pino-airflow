@@ -546,8 +546,7 @@ def plot_field_value_distributions(*, datasets: dict[str, pd.DataFrame]) -> widg
 
     # infer fields dynamically from first dataset
     sample_df = next(iter(datasets.values()))
-    field_names = [c for c in sample_df.columns if c != "meta"]
-
+    field_names = [c for c in sample_df.columns if c not in {"meta", "x", "y"}]
     cache: dict[str, _FieldCache] = {
         n: {
             "loaded": 0,
@@ -652,14 +651,25 @@ def plot_field_value_distributions(*, datasets: dict[str, pd.DataFrame]) -> widg
                                 ax.plot(x, kde(x) * vals.size * bw, color=color, lw=1.6)
                             except LinAlgError:
                                 pass
+                FIELD_LABELS: dict[str, str] = {
+                    "kxx": r"log10($k_{xx}$)",
+                    "kyy": r"log10($k_{yy}$)",
+                    "kxy": r"$\hat{k}_{xy}$ [-]",
+                    "phi": r"$\varepsilon$ [-]",
+                    "p_bc": r"$p_{\mathrm{bc}}$ [Pa]",
+                    "p": r"$p$ [Pa]",
+                    "u": r"$u$ [m/s]",
+                    "v": r"$v$ [m/s]",
+                    "U": r"$|\mathbf{u}|$ [m/s]",
+                }
 
                 if i == 0:
                     ax.set_title(stat)
                 if j == 0:
                     ax.set_ylabel("Count")
                     ax.annotate(
-                        f,
-                        xy=(-0.25, 0.5),
+                        FIELD_LABELS.get(f, f),
+                        xy=(-0.28, 0.5),
                         xycoords="axes fraction",
                         rotation=90,
                         va="center",

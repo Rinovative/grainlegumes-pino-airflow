@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any
 import ipywidgets as widgets
 import matplotlib.pyplot as plt
 from IPython.display import display
+from matplotlib.figure import Figure
 
 from src.util.util_plot_components import (
     ui_dropdown_dataset,
@@ -57,33 +58,56 @@ def _render_figure(
     kwargs: dict[str, Any] | None = None,
 ) -> None:
     """
-    Render a matplotlib figure into a widgets.Output container.
-
-    Centralised rendering logic:
-        - clear output
-        - call plot function
-        - display figure
-        - close figure
+    Render a figure inside an output widget.
 
     Parameters
     ----------
     out : widgets.Output
         Output widget to render into.
     plot_func : callable
-        Plotting function returning a matplotlib Figure.
+        Plotting function that returns a Figure or other displayable object.
     args : tuple, optional
-        Positional arguments forwarded to plot_func.
+        Positional arguments for the plot function (default: ()).
     kwargs : dict, optional
-        Keyword arguments forwarded to plot_func.
+        Keyword arguments for the plot function (default: None).
+
 
     """
     kwargs = kwargs or {}
 
     with out:
         out.clear_output(wait=True)
-        fig = plot_func(*args, **kwargs)
-        display(fig)
-        plt.close(fig)
+
+        result = plot_func(*args, **kwargs)
+
+        # Accept (fig, ...) as well
+        fig: Figure | None = None
+        if isinstance(result, Figure):
+            fig = result
+        elif isinstance(result, tuple) and len(result) > 0 and isinstance(result[0], Figure):
+            fig = result[0]
+
+        if fig is not None:
+            # Update export target if available
+            export_state = _EXPORT_CTX.get("export_state")
+            if isinstance(export_state, dict):
+                export_state["fig"] = fig
+
+                pn = _EXPORT_CTX.get("plot_name")
+                tt = _EXPORT_CTX.get("title")
+
+                if isinstance(pn, str) and pn:
+                    export_state["plot_name"] = pn
+                if isinstance(tt, str) and tt:
+                    export_state["title"] = tt
+
+            display(fig)
+            plt.close(fig)
+            return
+
+        # Non-figure results (rare): still display them
+        if result is not None:
+            display(result)
 
 
 def _attach_widget_rerender(
@@ -113,6 +137,36 @@ def _attach_widget_rerender(
         if hasattr(w, "boxes"):
             for cb in w.boxes.values():  # type: ignore[attr-defined]
                 cb.observe(lambda _: render_func(), names="value")
+
+
+# =============================================================================
+# EXPORT CONTEXT (set by util_nb before running a plot)
+# =============================================================================
+_EXPORT_CTX: dict[str, Any] = {}
+
+
+def set_export_context(export_state: dict | None, *, plot_name: str | None = None, title: str | None = None) -> None:
+    """
+    Set the export context for the next plot rendering.
+
+    Parameters
+    ----------
+    export_state : dict | None
+        Export state dictionary to populate (or None to disable).
+    plot_name : str | None, optional
+        Plot name for export (default: None).
+    title : str | None, optional
+        Plot title for export (default: None).
+
+    """
+    _EXPORT_CTX.clear()
+    _EXPORT_CTX.update(
+        {
+            "export_state": export_state,
+            "plot_name": plot_name,
+            "title": title,
+        }
+    )
 
 
 # =============================================================================

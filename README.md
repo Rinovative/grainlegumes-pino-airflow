@@ -168,6 +168,8 @@ M6 --> D2 --> M7 --> C1
 C3 --> D3
 
 subgraph P[PYTHON]
+P0[*src/schema_*.py*<br/>Define Data]
+
 P1[Load batch_name.json, /batch_name/case_XXXX_sol.csv<br/>/batch_name/case_XXXX.json]
 
 P2[*build_batch_dataset.py*<br/>Assemble fields, prune metadata,<br/>detect unused channels]
@@ -204,6 +206,7 @@ E1{{EDA *eda.ipynb*<br/>Case-level statistics + spectral sanity checks}}
 
         TO1[*spectral_hook.py*<br/>optional diagnostic SpectralConv hooks]
         TO2[*PINOLoss*<br/>Brinkman residual and data loss]
+        T0[*training/train_config.py*<br/>Define storage locations]
         T1[*train_base.py*<br/>Unified pipeline]
         T2[NeuralOP *Trainer*<br/>]
         D6[(Model Artifacts<br/>model_training/data/processed/model_name/...)]
@@ -211,7 +214,8 @@ E1{{EDA *eda.ipynb*<br/>Case-level statistics + spectral sanity checks}}
         %% -------------------------
         %% Data flow: training
         %% -------------------------
-        D5 --> P4 --> P5 --> P6 
+        D5 --> P4 --> P5 --> P6
+        T0 --> T1
         P4 --> T1 --> T2
 
         TO1 --> TE --> T1
@@ -231,7 +235,8 @@ E1{{EDA *eda.ipynb*<br/>Case-level statistics + spectral sanity checks}}
         %% -------------------------
         %% Data flow: evaluation
         %% -------------------------
-        T2 --> D6 
+        T2 --> D6
+        D4 --> D6 
         D6 --> E2
         D6 --> E3
 
@@ -245,7 +250,7 @@ end
 %% -------------------------
 %% Data flow: dataset build
 %% -------------------------
-P1 --> P2 --> D4 --> P3 --> D5
+P0 --> P1 --> P2 --> D4 --> P3 --> D5
 D4 --> E1
 
 E2 --> D7
@@ -454,7 +459,7 @@ Then open the URL shown in the terminal.
 
 ## 📄 License
 
-This project is released under the []().
+This project is released under the [Apache License 2.0](LICENSE).
 
 ---
 

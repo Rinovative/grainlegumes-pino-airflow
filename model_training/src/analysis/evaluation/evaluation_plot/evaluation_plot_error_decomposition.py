@@ -48,6 +48,17 @@ def plot_error_vs_gt_magnitude(*, datasets: dict[str, pd.DataFrame]) -> widgets.
     consistent with plot_global_error_metrics (1-1).
 
     Uses casecount viewer to incrementally load NPZ files.
+
+    Parameters
+    ----------
+    datasets : dict[str, pandas.DataFrame]
+        Mapping dataset_name → evaluation DataFrame.
+
+    Returns
+    -------
+    ipywidgets.VBox
+        Interactive casecount viewer widget.
+
     """
     n_bins = 15
     eps = 1e-12
@@ -257,15 +268,16 @@ def plot_error_vs_boundary_distance(
     datasets: dict[str, pd.DataFrame],
 ) -> widgets.VBox:
     """
-    Error decomposition with respect to distance from domain boundary. One subplot per dataset.
+    Error decomposition with respect to distance from the LEFT/RIGHT boundaries only (vertical boundaries).
 
     Uses casecount viewer to incrementally load NPZ files.
-    Plots MAE against distance bands from the boundary for all output channels separately.
+    Plots MAE against x-distance bands from the left/right boundary (full height stripes)
+    for all output channels separately.
 
     Parameters
     ----------
     datasets : dict[str, pandas.DataFrame]
-        Mapping dataset_name → evaluation DataFrame.
+        Mapping dataset_name -> evaluation DataFrame.
 
     Returns
     -------
@@ -273,7 +285,7 @@ def plot_error_vs_boundary_distance(
         Interactive casecount viewer widget.
 
     """
-    # Distance bands (normalised distance 0..1)
+    # Distance bands (normalised distance 0..1) based on x-distance to nearest vertical boundary
     bands = [
         (0.00, 0.05),
         (0.05, 0.10),
@@ -304,29 +316,10 @@ def plot_error_vs_boundary_distance(
         max_cases: int,
         channel_selector: CheckboxGroup,
     ) -> Figure:
-        """
-        Plot boundary error vs distance from boundary.
-
-        Parameters
-        ----------
-        datasets : dict[str, pandas.DataFrame]
-            Mapping dataset_name → evaluation DataFrame.
-        max_cases : int
-            Number of cases to include from each dataset.
-        channel_selector : CheckboxGroup
-            Channel selection checkbox widget.
-
-        Returns
-        -------
-        matplotlib.figure.Figure
-            Bar plot figure.
-
-        """
         # --------------------------------------------------------------
         # Active channels from checkbox widget
         # --------------------------------------------------------------
         active_channels = [name for name, cb in channel_selector.boxes.items() if cb.value]
-
         if not active_channels:
             msg = "At least one channel must be selected."
             raise ValueError(msg)
@@ -348,30 +341,30 @@ def plot_error_vs_boundary_distance(
                 pred = data["pred"]
                 gt = data["gt"]
 
-                _, ny, nx = gt.shape
+                # robust to (C, H, W) or (1, C, H, W)
+                if pred.ndim == 4:  # noqa: PLR2004
+                    pred = pred[0]
+                if gt.ndim == 4:  # noqa: PLR2004
+                    gt = gt[0]
 
-                # Distance to boundary (cells)
-                yy, xx = np.meshgrid(
-                    np.arange(ny),
-                    np.arange(nx),
-                    indexing="ij",
-                )
+                _, _, nx = gt.shape
 
-                dist_cells = np.minimum.reduce([xx, yy, (nx - 1) - xx, (ny - 1) - yy])
+                # x-distance to nearest vertical boundary (left/right), 1D over columns
+                x = np.arange(nx)
+                dist_cells_x = np.minimum(x, (nx - 1) - x)
 
-                # Normalised distance [0, 1]
-                d_max = min(nx, ny) / 2.0
-                dist = dist_cells / d_max
+                # normalised distance [0, 1] (approx), using half-width as scale
+                d_max = nx / 2.0
+                dist_x = dist_cells_x / d_max  # shape (nx,)
 
                 for ch in active_channels:
                     k = CHANNEL_INDICES[ch]
-                    err = np.abs(pred[k] - gt[k])
+                    err = np.abs(pred[k] - gt[k])  # shape (ny, nx)
 
                     for i, (lo, hi) in enumerate(bands):
-                        mask = dist >= lo if hi is None else (dist >= lo) & (dist < hi)
-
-                        if np.any(mask):
-                            entry["sum"][ch][i] += float(np.nanmean(err[mask]))
+                        cols = dist_x >= lo if hi is None else (dist_x >= lo) & (dist_x < hi)
+                        if np.any(cols):
+                            entry["sum"][ch][i] += float(np.nanmean(err[:, cols]))
 
                 entry["count"] += 1
 
@@ -395,28 +388,26 @@ def plot_error_vs_boundary_distance(
         ax_legend = fig.add_subplot(gs[0, -1])
         ax_legend.axis("off")
 
-        x = np.arange(len(active_channels))
+        x_pos = np.arange(len(active_channels))
         width = 0.8 / len(bands)
 
         bar_handles: list[Any] = []
 
         for ax, name in zip(axes, names, strict=False):
             entry = cache[name]
+            eps = 1e-12
+
+            # MAE pro Channel und Band (gemittelt ueber Cases)
+            mae_by_ch = {ch: np.array(entry["sum"][ch], dtype=float) / max(entry["count"], 1) for ch in active_channels}
+
+            # Referenz: Interior-Band (>40 %) = letztes Band
+            ref_idx = -1
 
             for i, _label in enumerate(band_labels):
-                eps = 1e-12
-
-                # MAE pro Channel und Band
-                mae_by_ch = {ch: np.array(entry["sum"][ch], dtype=float) / max(entry["count"], 1) for ch in active_channels}
-
-                # Referenz: Interior-Band (>40 %) = letztes Band
-                ref_idx = -1
-
-                # Band-Ratio
                 y = [mae_by_ch[ch][i] / (mae_by_ch[ch][ref_idx] + eps) for ch in active_channels]
 
                 bars = ax.bar(
-                    x + (i - (len(bands) - 1) / 2) * width,
+                    x_pos + (i - (len(bands) - 1) / 2) * width,
                     y,
                     width,
                 )
@@ -425,7 +416,7 @@ def plot_error_vs_boundary_distance(
                     bar_handles.append(bars[0])
 
             ax.axhline(1.0, color="k", linestyle="--", alpha=0.4)
-            ax.set_xticks(x)
+            ax.set_xticks(x_pos)
             ax.set_xticklabels(active_channels)
             ax.set_yscale("linear")
             ax.set_ylabel("Boundary error ratio (MAE / interior MAE)")
@@ -436,11 +427,11 @@ def plot_error_vs_boundary_distance(
         ax_legend.legend(
             bar_handles,
             band_labels,
-            title="Distance from boundary",
+            title="x-distance from left/right boundary",
             loc="upper left",
         )
 
-        fig.suptitle(f"Boundary error ratio vs distance from domain boundary (interior reference: >40 %, first {max_cases} cases)")
+        fig.suptitle("Left/right boundary error ratio vs x-distance (interior reference: >40 %)")
         fig.subplots_adjust(
             top=0.87,
             bottom=0.07,

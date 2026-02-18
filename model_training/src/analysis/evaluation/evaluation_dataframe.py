@@ -21,15 +21,50 @@ from the nested meta structure.
 
 from __future__ import annotations
 
+import ast
+import json
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
+
 # =============================================================================
 # Helpers
 # =============================================================================
+def _parse_meta(val: Any) -> Any:
+    """
+    Parse the `meta` field from various formats into a dictionary.
+
+    Parameters
+    ----------
+    val : Any
+        Input metadata value (dict, str, etc.).
+
+    Returns
+    -------
+    Any
+        Parsed metadata dictionary or original value.
+
+    """
+    if isinstance(val, dict):
+        return val
+    if isinstance(val, str):
+        s = val.strip()
+        if not s:
+            return {}
+        # JSON first
+        try:
+            return json.loads(s)
+        except Exception:  # noqa: BLE001, S110
+            pass
+        # fallback: python-literal
+        try:
+            return ast.literal_eval(s)
+        except Exception:  # noqa: BLE001
+            return {}
+    return val
 
 
 def _to_scalar(val: Any) -> Any:
@@ -165,7 +200,7 @@ def build_eval_df(df_raw: pd.DataFrame) -> pd.DataFrame:
     df = df_raw.copy()
 
     if "meta" in df.columns:
-        meta_features = df["meta"].apply(flatten_meta_scalars)
+        meta_features = df["meta"].apply(lambda m: flatten_meta_scalars(_parse_meta(m)))
         meta_df = pd.DataFrame(meta_features.tolist())
 
         df = pd.concat([df, meta_df], axis=1)

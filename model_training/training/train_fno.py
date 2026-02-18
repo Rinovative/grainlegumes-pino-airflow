@@ -38,7 +38,7 @@ CONFIG = {
     "pin_memory": True,
     "persistent_workers": True,
     # --- Training ---
-    "n_epochs": 1_000,
+    "n_epochs": 600,
     "eval_interval": 5,  # evaluate every N epochs
     "mixed_precision": False,  # enables AMP on modern GPUs
     # --- Checkpointing & Resume ---
@@ -53,11 +53,11 @@ CONFIG = {
 
 def finalize_config(CONFIG: dict) -> None:
     """Finalize and validate the configuration dictionary."""
-    CONFIG.setdefault("modes_x", 64)
-    CONFIG.setdefault("modes_y", 64)
+    CONFIG.setdefault("modes_x", 128)
+    CONFIG.setdefault("modes_y", 160)
 
     CONFIG.setdefault("hidden_channels", 64)
-    CONFIG.setdefault("n_layers", 4)
+    CONFIG.setdefault("n_layers", 3)
 
 
 # ================================================================
@@ -66,8 +66,8 @@ def finalize_config(CONFIG: dict) -> None:
 # --- Model ---
 def build_model(CONFIG: dict) -> FNO:
     """Build the FNO model based on the configuration."""
-    CONFIG.setdefault("modes_x", 64)
-    CONFIG.setdefault("modes_y", 64)
+    CONFIG.setdefault("modes_x", 128)
+    CONFIG.setdefault("modes_y", 160)
 
     m_x = int(CONFIG["modes_x"])
     m_y = int(CONFIG["modes_y"])
@@ -108,7 +108,7 @@ def build_optimizer(CONFIG: dict, model: FNO) -> AdamW:
     """Build the AdamW optimizer for the model."""
     return AdamW(
         model.parameters(),
-        lr=CONFIG.get("lr", 1e-2),
+        lr=CONFIG.get("lr", 0.006213783249197781),
         weight_decay=CONFIG.get("weight_decay", 1e-4),
     )
 

@@ -278,18 +278,19 @@ def _select_topk_per_channel(*, datasets: dict[str, pd.DataFrame], k: int) -> di
 
     """
     out: dict[str, dict[str, list[int]]] = {}
+    k_top = int(k)
 
     for name, df in datasets.items():
         out[name] = {}
         for ch in CHANNELS:
-            k = CHANNEL_INDICES[ch]
+            ch_idx = CHANNEL_INDICES[ch]
             scores = []
             for idx, row in df.iterrows():
                 _, gt, err, _, _ = _load_npz(row)
-                if k < err.shape[0] and k < gt.shape[0]:
-                    scores.append((idx, _rel_l2(err[k], gt[k])))
+                if ch_idx < err.shape[0] and ch_idx < gt.shape[0]:
+                    scores.append((idx, _rel_l2(err[ch_idx], gt[ch_idx])))
             scores.sort(key=lambda x: x[1], reverse=True)
-            out[name][ch] = [i for i, _ in scores[:k]]
+            out[name][ch] = [i for i, _ in scores[:k_top]]
 
     return out
 
@@ -301,46 +302,39 @@ def _select_topk_per_channel(*, datasets: dict[str, pd.DataFrame], k: int) -> di
 
 def _aggregate_kappa(kappa: np.ndarray, names: list[str]) -> np.ndarray:
     """
-    Aggregate kappa values into a single field.
+    Aggregate permeability tensor to a scalar field using ONLY diagonal components.
+
+    Supported:
+        - kxx, kyy          (2D)
+        - kxx, kyy, kzz     (3D)
+    Everything else raises to avoid wrong visualisation.
 
     Parameters
     ----------
     kappa : np.ndarray
-        Kappa values with shape (K, ny, nx).
+        Kappa tensor array.
     names : list[str]
         Names of the kappa components.
 
     Returns
     -------
-        np.ndarray
-            Aggregated kappa field.
+    np.ndarray
+        Aggregated scalar kappa field.
 
     """
-    K = kappa.shape[0]
-    name_to_idx = {name.lower(): i for i, name in enumerate(names)}
+    name_to_idx = {str(name).lower(): i for i, name in enumerate(names)}
 
-    diag_keys = ["kappaxx", "kappayy", "kappazz"]
-    diag_indices = [name_to_idx[k] for k in diag_keys if k in name_to_idx]
+    has_2d = {"kxx", "kyy"}.issubset(name_to_idx)
+    has_3d = {"kxx", "kyy", "kzz"}.issubset(name_to_idx)
 
-    if K == 1:
-        return kappa[0]
+    if has_3d:
+        return (kappa[name_to_idx["kxx"]] + kappa[name_to_idx["kyy"]] + kappa[name_to_idx["kzz"]]) / 3.0
 
-    if K == 2 and len(diag_indices) == 2:  # noqa: PLR2004
-        ixx, iyy = diag_indices
-        return (kappa[ixx] + kappa[iyy]) / 2.0
+    if has_2d:
+        return 0.5 * (kappa[name_to_idx["kxx"]] + kappa[name_to_idx["kyy"]])
 
-    if K == 4 and len(diag_indices) >= 2:  # noqa: PLR2004
-        ixx = name_to_idx.get("kappaxx", diag_indices[0])
-        iyy = name_to_idx.get("kappayy", diag_indices[1])
-        return (kappa[ixx] + kappa[iyy]) / 2.0
-
-    if K == 9 and len(diag_indices) == 3:  # noqa: PLR2004
-        ixx = name_to_idx["kappaxx"]
-        iyy = name_to_idx["kappayy"]
-        izz = name_to_idx["kappazz"]
-        return (kappa[ixx] + kappa[iyy] + kappa[izz]) / 3.0
-
-    return kappa.mean(axis=0)
+    msg = f"kappa aggregation expects diagonal components {{kxx, kyy}} (and optional kzz). Got: {sorted(name_to_idx.keys())}"
+    raise ValueError(msg)
 
 
 # =============================================================================
@@ -957,6 +951,177 @@ def _select_extreme_inputs(*, datasets: dict[str, pd.DataFrame], column: str) ->
     return out
 
 
+# =============================================================================
+# Helper: 4x4 Prediction/GT/Error/Kappa (reusable)
+# =============================================================================
+def _plot_prediction_overview_case_4x4(
+    *,
+    row: pd.Series,
+    dataset_name: str,
+    case_label: str,
+    error_mode: widgets.ValueWidget,
+) -> Figure:
+    """
+    Plot a 4x4 overview of prediction, ground truth, error, and kappa for a given case.
+
+    Parameters
+    ----------
+    row : pd.Series
+        The DataFrame row containing the case data.
+    dataset_name : str
+        The name of the dataset.
+    case_label : str
+        A label for the case (e.g., "Case 42 | channel=u").
+    error_mode : widgets.ValueWidget
+        A widget indicating the error mode ("MAE" or "RelErr").
+
+    Returns
+    -------
+        Figure
+            The generated matplotlib Figure.
+
+    """
+    cmap_pred_true = "turbo"
+    cmap_error = "Blues"
+    cmap_kappa = "viridis"
+    n_levels = 10
+    mask_threshold = 1e-4
+
+    pred, gt, err, kappa, kappa_names = _load_npz(row)
+
+    Lx = float(row["geometry_Lx"])
+    Ly = float(row["geometry_Ly"])
+    ny, nx = pred[CHANNEL_INDICES[CHANNELS[0]]].shape
+
+    x = np.linspace(0, Lx, nx)
+    y = np.linspace(0, Ly, ny)
+    X, Y = np.meshgrid(x, y)
+
+    fig, axes = plt.subplots(4, 4, figsize=(20, 9))
+
+    # ---- Kappa fields ----
+    kappa_field = _aggregate_kappa(kappa, kappa_names)
+    kappa_levels = util.util_plot_components.compute_levels(kappa_field, n_levels)
+
+    kappa_log_field = np.log10(np.maximum(kappa_field, 1e-30))
+    kappa_log_levels = util.util_plot_components.compute_levels(kappa_log_field, n_levels)
+
+    nrows = 4  # fixed layout
+
+    for r, label in enumerate(CHANNELS):
+        is_last_row = r == nrows - 1
+
+        # -------------------------------------------------
+        # Prediction
+        # -------------------------------------------------
+        ax = axes[r, 0]
+        k = CHANNEL_INDICES[label]
+        field = pred[k]
+
+        im = ax.contourf(
+            X,
+            Y,
+            field,
+            levels=util.util_plot_components.compute_levels(field, n_levels),
+            cmap=cmap_pred_true,
+        )
+
+        if label in {"u", "v", "U"}:
+            u = pred[CHANNEL_INDICES["u"]]
+            v = pred[CHANNEL_INDICES["v"]]
+            util.util_plot_components.overlay_streamlines(ax, X, Y, u, v)
+
+        ax.set_title(f"{label} pred [{UNIT_MAP[label]}]")
+        cb = fig.colorbar(im, ax=ax, fraction=0.04)
+        cb.ax.yaxis.set_major_formatter(util.util_plot_components.choose_colorbar_formatter(*im.get_clim()))
+        util.util_plot_components.apply_axis_labels(ax, 0, Lx, Ly, is_last_row=is_last_row)
+
+        # -------------------------------------------------
+        # Ground truth
+        # -------------------------------------------------
+        ax = axes[r, 1]
+        field = gt[k]
+
+        im = ax.contourf(
+            X,
+            Y,
+            field,
+            levels=util.util_plot_components.compute_levels(field, n_levels),
+            cmap=cmap_pred_true,
+        )
+
+        if label in {"u", "v", "U"}:
+            u = gt[CHANNEL_INDICES["u"]]
+            v = gt[CHANNEL_INDICES["v"]]
+            util.util_plot_components.overlay_streamlines(ax, X, Y, u, v)
+
+        ax.set_title(f"{label} true [{UNIT_MAP[label]}]")
+        cb = fig.colorbar(im, ax=ax, fraction=0.04)
+        cb.ax.yaxis.set_major_formatter(util.util_plot_components.choose_colorbar_formatter(*im.get_clim()))
+        util.util_plot_components.apply_axis_labels(ax, 1, Lx, Ly, is_last_row=is_last_row)
+
+        # -------------------------------------------------
+        # Error
+        # -------------------------------------------------
+        ax = axes[r, 2]
+
+        if error_mode.value == "MAE":
+            err_field = np.abs(err[k]).astype(float)
+            err_field = np.nan_to_num(err_field, nan=0.0)
+            err_title = f"{label} MAE [{UNIT_MAP[label]}]"
+        else:
+            abs_err = np.abs(err[k]).astype(float)
+            true_abs = np.abs(gt[k]).astype(float)
+            err_field = abs_err / (true_abs + 1e-12) * 100.0
+            err_field[true_abs < mask_threshold] = np.nan
+            err_title = f"{label} rel err [%]"
+
+        valid = err_field[np.isfinite(err_field)]
+        if valid.size == 0:
+            ax.set_title(err_title)
+            ax.axis("off")
+        else:
+            clip_q = 0.99
+            vmax = float(np.nanquantile(valid, clip_q))
+            vmax = max(vmax, 1e-12)
+
+            levels_err = np.linspace(0.0, vmax, n_levels)
+
+            err_plot = np.ma.masked_greater(err_field, vmax)
+            cmap_obj = plt.get_cmap(cmap_error).copy()
+            cmap_obj.set_bad("white")
+
+            im = ax.contourf(X, Y, err_plot, levels=levels_err, cmap=cmap_obj)
+
+            ax.set_title(err_title)
+            cb = fig.colorbar(im, ax=ax, fraction=0.04)
+            cb.ax.yaxis.set_major_formatter(util.util_plot_components.choose_colorbar_formatter(0.0, vmax))
+            util.util_plot_components.apply_axis_labels(ax, 2, Lx, Ly, is_last_row=is_last_row)
+
+        # -------------------------------------------------
+        # Kappa panels
+        # -------------------------------------------------
+        ax = axes[r, 3]
+        if r == 0:
+            im = ax.contourf(X, Y, kappa_field, levels=kappa_levels, cmap=cmap_kappa)
+            ax.set_title("kappa [m²]")
+            fig.colorbar(im, ax=ax, fraction=0.04)
+            util.util_plot_components.apply_axis_labels(ax, 3, Lx, Ly, is_last_row=is_last_row)
+
+        elif r == 1:
+            im = ax.contourf(X, Y, kappa_log_field, levels=kappa_log_levels, cmap=cmap_kappa)
+            ax.set_title("log10(kappa) [m²]")
+            fig.colorbar(im, ax=ax, fraction=0.04)
+            util.util_plot_components.apply_axis_labels(ax, 3, Lx, Ly, is_last_row=is_last_row)
+
+        else:
+            ax.axis("off")
+
+    fig.suptitle(f"{dataset_name} — {case_label}", fontsize=14)
+    fig.tight_layout()
+    return fig
+
+
 def plot_extreme_input_cases(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
     """
     Plot an interactive viewer for cases with extreme input parameter values.
@@ -1016,7 +1181,7 @@ def plot_extreme_input_cases(*, datasets: dict[str, pd.DataFrame]) -> widgets.VB
 
         case_label = f"Case {case_id} | {inp_sel.value} = {value:.3g} ({kind})"
 
-        return _plot_prediction_overview_case(
+        return _plot_prediction_overview_case_4x4(
             row=row,
             dataset_name=dataset_name,
             case_label=case_label,

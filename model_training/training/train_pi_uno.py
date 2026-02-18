@@ -13,11 +13,16 @@ from neuralop.layers.spectral_convolution import SpectralConv
 from neuralop.models import UNO
 from neuralop.training import AdamW
 from src.util.util_metrics import RMSEOverall
+from torch import nn
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.optim.optimizer import Optimizer
 
-from training.tools.pino_loss_physical import PINOPhysicalLoss
-from training.tools.pino_loss_spectral import PINOSpectralLoss
+from training.tools.pino_brinkman_losses import (
+    PINOPhysicalLossDiv,
+    PINOPhysicalLossPhi,
+    PINOSpectralLossDiv,
+    PINOSpectralLossPhi,
+)
 from training.tools.spectral_hook import SpectralEnergyHook
 from training.train_base import train_base
 
@@ -30,11 +35,17 @@ CONFIG = {
     "seed": 9,
     "device": "cuda" if torch.cuda.is_available() else "cpu",
     # --- Physics-informed training ---
-    # "fft" -> PI-UNO-FFT
-    # "ps"  -> PI-UNO-PS
-    "pino_loss_type": "fft",
-    "lambda_phys": 1e-4,
-    "lambda_p": 5e-4,
+    # Optionen:
+    #   "ps_phi"  -> Physical derivatives + div(phi u)
+    #   "ps_u"    -> Physical derivatives + div(u)
+    #   "sp_phi"  -> Spectral derivatives + div(phi u)
+    #   "sp_u"    -> Spectral derivatives + div(u)
+    "pino_loss_type": "sp_u",
+    "grad_mode": "fft_reflect",  # only for spectral losses
+    "interior_pad": 2,  # useful for sp_*, can be 0 for ps_*
+    "lambda_phys": 0.0001,
+    "lambda_p": 0.0005,
+    "phys_warmup_epochs": 300,
     # --- Spectral diagnostics ---
     "enable_spectral_hooks": True,
     # --- Dataset ---
@@ -48,11 +59,10 @@ CONFIG = {
     "pin_memory": True,
     "persistent_workers": True,
     # --- Training ---
-    "n_epochs": 1_000,
+    "n_epochs": 600,
     "eval_interval": 5,  # evaluate every N epochs
     "mixed_precision": False,  # enables AMP on modern GPUs
     # --- Checkpointing & Resume ---
-    # "resume_from_dir": "FNO_samples_uniform_var10_N1000_20251112_153012",
     # "resume_from_dir": "latest",
     # --- Logging ---
     "save_best": "eval_overall_rmse",  # metric key to monitor for best checkpoint
@@ -64,25 +74,35 @@ CONFIG = {
 def finalize_config(CONFIG: dict) -> None:
     """Finalize the configuration by setting default values for missing keys."""
     # Architecture
-    CONFIG.setdefault("n_layers", 5)
+    CONFIG.setdefault("n_layers", 7)
     CONFIG.setdefault("hidden_channels", 32)
-    CONFIG.setdefault("modes_x", 128)
-    CONFIG.setdefault("modes_y", 128)
-    CONFIG.setdefault("mode_ratio", 0.5)
+    CONFIG.setdefault("modes_x", 64)
+    CONFIG.setdefault("modes_y", 64)
+    CONFIG.setdefault("mode_ratio", 0.4951318201313778)
     CONFIG.setdefault(
         "uno_scalings",
         [
             [1.0, 1.0],
             [0.5, 0.5],
+            [0.5, 0.5],
             [1.0, 1.0],
             [1.0, 1.0],
+            [2.0, 2.0],
             [2.0, 2.0],
         ],
     )
 
+    # Loss selection defaults
+    CONFIG.setdefault("pino_loss_type", "sp_phi")
+    CONFIG.setdefault("grad_mode", "fft_reflect")
+    # interior_pad default: spectral sinnvoll >0, physical sinnvoll 0
+    lt = str(CONFIG.get("pino_loss_type", "sp_phi"))
+    CONFIG.setdefault("interior_pad", 2 if lt.startswith("sp") else 0)
+
     # Physics-informed weights
     _ = CONFIG["lambda_phys"]
     _ = CONFIG["lambda_p"]
+    _ = CONFIG["phys_warmup_epochs"]
 
 
 # ================================================================
@@ -105,7 +125,7 @@ def build_model(CONFIG: dict) -> UNOWithCheckpoint:
     hidden = CONFIG["hidden_channels"]
     uno_scalings = CONFIG["uno_scalings"]
 
-    mode_ratio = float(CONFIG.get("mode_ratio", 0.5))
+    mode_ratio = float(CONFIG.get("mode_ratio", 0.4951318201313778))
 
     base_x = int(CONFIG["modes_x"])
     base_y = int(CONFIG["modes_y"])
@@ -131,6 +151,10 @@ def build_model(CONFIG: dict) -> UNOWithCheckpoint:
             [mid_x, mid_y],
             [base_x, base_y],
         ]
+    else:
+        msg = f"Unsupported n_layers for UNO: {n_layers}"
+        raise ValueError(msg)
+
     uno_out_channels = [hidden] * n_layers
 
     return UNOWithCheckpoint(
@@ -153,10 +177,19 @@ def build_model_name(CONFIG: dict, model: UNO) -> str:
     m_x = int(CONFIG["modes_x"])
     m_y = int(CONFIG["modes_y"])
 
-    loss_tag = "PI-UNO-FFT" if CONFIG.get("pino_loss_type") == "fft" else "PI-UNO-PS"
+    loss_type = str(CONFIG.get("pino_loss_type", "sp_phi"))
+    tag_map = {
+        "ps_phi": "PI-UNO-PS-PHI",
+        "ps_u": "PI-UNO-PS-DIV",
+        "sp_phi": "PI-UNO-SP-PHI",
+        "sp_u": "PI-UNO-SP-DIV",
+    }
+    if loss_type not in tag_map:
+        msg = f"Unknown pino_loss_type: {loss_type}"
+        raise ValueError(msg)
 
     parts = [
-        loss_tag,
+        tag_map[loss_type],
         f"m{m_x}x{m_y}",
         f"h{CONFIG['hidden_channels']}",
         f"l{CONFIG['n_layers']}",
@@ -166,6 +199,10 @@ def build_model_name(CONFIG: dict, model: UNO) -> str:
         f"lamP{CONFIG['lambda_p']:.0e}",
         CONFIG["train_dataset_name"],
     ]
+
+    # optional: grad mode nur bei spectral
+    if loss_type.startswith("sp"):
+        parts.append(f"grad{CONFIG.get('grad_mode', 'fft_reflect')}")
 
     if CONFIG.get("run_suffix") is not None:
         parts.append(str(CONFIG["run_suffix"]))
@@ -177,12 +214,11 @@ def build_optimizer(CONFIG: dict, model: UNO) -> AdamW:
     """Build the AdamW optimizer for the model."""
     return AdamW(
         model.parameters(),
-        lr=CONFIG.get("lr", 5e-3),
+        lr=CONFIG.get("lr", 0.0085115429814798161),
         weight_decay=CONFIG.get("weight_decay", 1e-4),
     )
 
 
-# --- Scheduler ---
 def build_scheduler(optimizer: Optimizer) -> ReduceLROnPlateau:
     """Build the ReduceLROnPlateau scheduler for the optimizer."""
     return ReduceLROnPlateau(
@@ -195,30 +231,38 @@ def build_scheduler(optimizer: Optimizer) -> ReduceLROnPlateau:
 
 
 # --- Losses ---
-def build_train_loss(CONFIG: dict) -> PINOPhysicalLoss | PINOSpectralLoss:
+def build_train_loss(CONFIG: dict) -> nn.Module:
     """Build the training loss function based on the configuration."""
-    loss_type = CONFIG.get("pino_loss_type", "fft")
+    loss_type = str(CONFIG.get("pino_loss_type", "sp_phi"))
 
-    if loss_type == "fft":
-        return PINOSpectralLoss(
-            data_loss=H1Loss(d=2),
-            lambda_phys=CONFIG["lambda_phys"],
-            lambda_p=CONFIG["lambda_p"],
-            in_normalizer=None,
-            out_normalizer=None,
-        )
+    grad_mode = str(CONFIG.get("grad_mode", "fft_reflect"))
+    interior_pad = int(CONFIG.get("interior_pad", 2 if loss_type.startswith("sp") else 0))
 
-    if loss_type == "ps":
-        return PINOPhysicalLoss(
-            data_loss=H1Loss(d=2),
-            lambda_phys=CONFIG["lambda_phys"],
-            lambda_p=CONFIG["lambda_p"],
-            in_normalizer=None,
-            out_normalizer=None,
-        )
+    cls_map = {
+        "ps_phi": PINOPhysicalLossPhi,
+        "ps_u": PINOPhysicalLossDiv,
+        "sp_phi": PINOSpectralLossPhi,
+        "sp_u": PINOSpectralLossDiv,
+    }
+    if loss_type not in cls_map:
+        msg = f"Unknown pino_loss_type: {loss_type}"
+        raise ValueError(msg)
 
-    msg = f"Unknown pino_loss_type: {loss_type}"
-    raise ValueError(msg)
+    LossCls = cls_map[loss_type]
+
+    kwargs: dict = {
+        "data_loss": H1Loss(d=2),
+        "lambda_phys": CONFIG["lambda_phys"],
+        "lambda_p": CONFIG["lambda_p"],
+        "in_normalizer": None,
+        "out_normalizer": None,
+        "interior_pad": interior_pad,
+    }
+
+    if loss_type.startswith("sp"):
+        kwargs["grad_mode"] = grad_mode
+
+    return LossCls(**kwargs)
 
 
 eval_losses = {

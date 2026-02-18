@@ -276,7 +276,8 @@ def build_batch_dataset(batch_name: str, verbose: bool = False) -> dict:  # noqa
         # Off-diagonal components are stored in dimensionless,
         # normalized form using sqrt(k_ii * k_jj).
         # --------------------------------------------------------------
-        eps = 1e-12
+        eps_kappa = 1e-20
+        eps_det = 1e-30
 
         # Collect all available COMSOL permeability components
         # (strip the COMSOL_PREFIX 'br.' to match schema naming)
@@ -310,14 +311,19 @@ def build_batch_dataset(batch_name: str, verbose: bool = False) -> dict:  # noqa
 
             if internal_name in ("kxx", "kyy", "kzz"):
                 # Diagonal components: stored in log10-space
-                input_fields[internal_name] = np.log10(raw + eps)
+                input_fields[internal_name] = np.log10(raw + eps_kappa)
             else:
                 # Off-diagonal components: dimensionless, normalized by
                 # sqrt(k_ii * k_jj) to ensure scale consistency
                 i, j = internal_name[1], internal_name[2]
-                kii = input_fields[f"k{i}{i}"]
-                kjj = input_fields[f"k{j}{j}"]
-                input_fields[internal_name] = raw / np.sqrt(10**kii * 10**kjj + eps)
+                kii_log = input_fields[f"k{i}{i}"]
+                kjj_log = input_fields[f"k{j}{j}"]
+
+                Kii = 10**kii_log
+                Kjj = 10**kjj_log
+
+                denom = np.sqrt(np.maximum(Kii * Kjj, eps_det))
+                input_fields[internal_name] = raw / denom
 
         # --------------------------------------------------------------
         # Scalar input fields (phi, p_bc)

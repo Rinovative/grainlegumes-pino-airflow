@@ -68,7 +68,9 @@ class SpectralEnergyHook:
         # output: [B, C, Nx, Ny]
         with torch.no_grad():
             spatial_dims = tuple(range(2, output.ndim))
-            fft = torch.fft.rfftn(output, dim=spatial_dims)
+            # Remove DC per-sample, per-channel (reduces domination of k~0 bin)
+            x = output - output.mean(dim=spatial_dims, keepdim=True)
+            fft = torch.fft.rfftn(x, dim=spatial_dims)
             power = fft.real**2 + fft.imag**2
             power = power.mean(dim=(0, 1))  # avg over batch + channels
             self.energy[id(module)].append(power.cpu())

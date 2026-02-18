@@ -51,13 +51,21 @@ def _load_arch_from_npz_path(npz_path: str | Path) -> dict[str, Any]:
     npz_path_p = Path(npz_path)
 
     # npz -> cases -> analysis -> (id|ood) -> run_dir
-    run_dir = npz_path_p.parents[3]
+    run_dir = None
+    for parent in npz_path_p.parents:
+        if parent.name == "analysis":
+            run_dir = parent.parent
+            break
+
+    if run_dir is None:
+        msg = f"Could not determine run directory from npz_path: {npz_path}"
+        raise FileNotFoundError(msg)
+
     cfg_path = run_dir / "config.json"
 
     if not cfg_path.exists():
         msg = f"config.json not found for run: {run_dir}"
         raise FileNotFoundError(msg)
-
     with cfg_path.open("r", encoding="utf-8") as f:
         cfg = json.load(f)
 

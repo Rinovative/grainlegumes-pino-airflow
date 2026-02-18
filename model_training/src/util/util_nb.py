@@ -8,6 +8,8 @@ This module provides:
 """
 
 from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import ipywidgets as widgets
@@ -62,17 +64,16 @@ def _show_anything(result: Any) -> None:
         display(result)
 
 
-def make_dropdown_section(plots: list) -> Any:
+def make_dropdown_section(plots: list, *, export_state: dict | None = None) -> Any:
     """
-    Create an interactive dropdown section for selecting and displaying plots.
-
-    Each entry in 'plots' must be a tuple (title, function, plot_name).
+    Create an interactive dropdown section for multiple plots.
 
     Args:
-        plots (list): List of tuples (title, function, plot_name).
+        plots (list): List of tuples (title, plot_function, plot_name).
+        export_state (dict, optional): Dictionary to store export information.
 
     Returns:
-        widgets.VBox: Interactive section with dropdown and output area.
+        widgets.VBox: A widget container suitable for direct notebook display.
 
     """
     dropdown = widgets.Dropdown(
@@ -88,15 +89,31 @@ def make_dropdown_section(plots: list) -> Any:
         if last_idx["idx"] == idx:
             return
 
-        plot_func = plots[idx][1]
+        title, plot_func, plot_name = plots[idx]
 
         with output:
             output.clear_output(wait=True)
             plt.close("all")
 
+            # Tell util_plot where to store figures rendered inside viewers/callbacks
+            if export_state is not None:
+                from src.util import util_plot as _util_plot  # local import to avoid circular import  # noqa: PLC0415
+
+                _util_plot.set_export_context(export_state, plot_name=plot_name, title=title)
+
             result = plot_func()
             if isinstance(result, tuple):
                 result = result[0]
+
+            # update export target for direct Figure returns
+            if export_state is not None:
+                export_state["title"] = title
+                export_state["plot_name"] = plot_name
+
+                # WICHTIG: NICHT auf None ueberschreiben, wenn ein Viewer-Widget zurueckkommt.
+                # In dem Fall setzt util_plot._render_figure die Figure bereits in export_state.
+                if isinstance(result, Figure):
+                    export_state["fig"] = result
 
             if isinstance(result, Figure):
                 display(result)
@@ -167,6 +184,10 @@ def make_lazy_panel_with_tabs(
     tab_titles: Sequence[str] | None = None,
     open_btn_text: str = "Open section",
     close_btn_text: str = "Close",
+    *,
+    export_state: dict | None = None,
+    export_dir: str = "exports",
+    export_btn_text: str = "Export PDF",
 ) -> widgets.Output:
     """
     Create a collapsible widget panel containing multiple tabs.
@@ -179,6 +200,9 @@ def make_lazy_panel_with_tabs(
         tab_titles (list, optional): Titles for the tabs. Defaults to numbered tabs.
         open_btn_text (str, optional): Label for the open button. Defaults to "Open section".
         close_btn_text (str, optional): Label for the close button. Defaults to "Close".
+        export_state (dict, optional): Dictionary to store export information.
+        export_dir (str, optional): Directory to save exported files. Defaults to "exports".
+        export_btn_text (str, optional): Label for the export button. Defaults to "Export PDF".
 
     Returns:
         widgets.Output: A widget container suitable for direct notebook display.
@@ -196,7 +220,41 @@ def make_lazy_panel_with_tabs(
         for i in range(len(sections)):
             tabs.set_title(i, f"Tab {i + 1}")
 
-    panel = widgets.VBox([close_btn, tabs])
+    status_out = widgets.Output()
+
+    export_btn = widgets.Button(
+        description=export_btn_text,
+        button_style="success",
+        layout=widgets.Layout(width="145px"),
+    )
+
+    def do_export(_: None = None) -> None:
+        with status_out:
+            status_out.clear_output(wait=True)
+
+            if export_state is None:
+                print("[Export] export_state ist None.")
+                return
+
+            fig = export_state.get("fig", None)
+            if fig is None:
+                print("[Export] Kein Matplotlib-Figure Objekt verfuegbar (zuerst einen Plot anzeigen).")
+                return
+
+            out_dir = Path(export_dir)
+            out_dir.mkdir(parents=True, exist_ok=True)
+
+            stem = export_state.get("plot_name") or "plot"
+            ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+            out_path = out_dir / f"{stem}_{ts}.pdf"
+
+            fig.savefig(out_path, bbox_inches="tight")
+            print(f"[Export] Gespeichert: {out_path}")
+
+    export_btn.on_click(do_export)
+
+    header = widgets.HBox([close_btn, export_btn])
+    panel = widgets.VBox([header, status_out, tabs])
 
     def show_panel(_: None = None) -> None:
         with main_out:

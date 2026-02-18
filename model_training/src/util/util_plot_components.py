@@ -7,6 +7,7 @@ used by higher-level navigator functions in util_plot.py.
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING, Protocol
 
 import ipywidgets as widgets
@@ -81,6 +82,8 @@ def _build_radio(
     value: str,
     width: str,
     margin: str | None = None,
+    description: str | None = None,
+    description_width: str = "initial",
 ) -> widgets.RadioButtons:
     """
     Create internal generic radio-button builder.
@@ -95,6 +98,10 @@ def _build_radio(
         CSS width of the radio button group.
     margin : str | None, optional
         CSS margin around the radio button group, by default None.
+    description : str | None, optional
+        Optional label shown left of the radio group.
+    description_width : str, optional
+        CSS-like width for the description area, default "initial".
 
     Returns
     -------
@@ -102,14 +109,16 @@ def _build_radio(
         Configured radio button widget.
 
     """
-    layout: dict[str, str] = {"width": width}
+    layout_kwargs: dict[str, str] = {"width": width}
     if margin is not None:
-        layout["margin"] = margin
+        layout_kwargs["margin"] = margin
 
     return widgets.RadioButtons(
         options=options,
         value=value,
-        layout=layout,
+        description=description or "",
+        layout=widgets.Layout(**layout_kwargs),
+        style={"description_width": description_width},
     )
 
 
@@ -449,6 +458,33 @@ def ui_radio_error_mode() -> widgets.RadioButtons:
         value="MAE",
         width="90px",
         margin="0 0 0 12px",
+        description="Error mode:",
+        description_width="initial",
+    )
+
+
+def ui_radio_pred_scale_mode() -> widgets.RadioButtons:
+    """
+    Radio button selector for prediction/GT scaling.
+
+    Options
+    -------
+    - "Independent" : pred and GT get their own scales (current behaviour)
+    - "Shared (GT)" : pred uses GT scale; pred outliers outside GT range are masked
+
+    Returns
+    -------
+    widgets.RadioButtons
+        Configured scale-mode radio buttons.
+
+    """
+    return _build_radio(
+        options=["Independent", "Shared (GT)"],
+        value="Independent",
+        width="auto",
+        margin="0 0 0 12px",
+        description="Pred/GT scale:",
+        description_width="initial",
     )
 
 
@@ -472,6 +508,8 @@ def ui_radio_kappa_scale() -> widgets.RadioButtons:
         value="log10(kappa)",
         width="100px",
         margin="0 0 0 12px",
+        description="Kappa scale:",
+        description_width="initial",
     )
 
 
@@ -577,6 +615,38 @@ def ui_checkbox_log_scale(
     )
 
 
+def ui_checkbox_normalise(
+    *,
+    description: str = "Normalise",
+    default: bool = True,
+    width: str = "160px",
+) -> widgets.Checkbox:
+    """
+    Checkbox selector for normalisation toggles.
+
+    Parameters
+    ----------
+    description : str, optional
+        Checkbox label.
+    default : bool, optional
+        Default checkbox state.
+    width : str, optional
+        CSS width.
+
+    Returns
+    -------
+    widgets.Checkbox
+        Configured checkbox.
+
+    """
+    return widgets.Checkbox(
+        value=default,
+        description=description,
+        indent=False,
+        layout=widgets.Layout(width=width),
+    )
+
+
 # =============================================================================
 # OUTPUT CONTAINER
 # =============================================================================
@@ -602,9 +672,52 @@ def ui_output_plot() -> widgets.Output:
 # COLORBAR FORMATTERS
 
 
-def choose_colorbar_formatter(vmin: float, vmax: float) -> mticker.Formatter:
+def _max_decimals_from_ticks(ticks: np.ndarray, *, cap: int = 6) -> int:
     """
-    Choose an appropriate colorbar formatter based on value range.
+    Determine the maximum number of decimals needed across ticks AFTER stripping trailing zeros per tick.
+
+    Example:
+        ticks contain 0.18 -> max_decimals = 2 -> show 0.20 (not 0.2)
+
+    Parameters
+    ----------
+    ticks : np.ndarray
+        Tick values.
+    cap : int, optional
+        Maximum number of decimals to consider (default: 6).
+
+    Returns
+    -------
+    int
+        Maximum number of decimals needed.
+
+    """
+    t = np.asarray(ticks, dtype=float)
+    t = t[np.isfinite(t)]
+    if t.size == 0:
+        return 0
+
+    max_dec = 0
+    for x in t:
+        s = f"{x:.{cap}f}".rstrip("0").rstrip(".")
+        if "." in s:
+            max_dec = max(max_dec, len(s.split(".")[1]))
+    return max_dec
+
+
+def choose_colorbar_formatter(
+    vmin: float,
+    vmax: float,
+    *,
+    ticks: np.ndarray | None = None,
+) -> mticker.Formatter:
+    """
+    Show consistent tick labels with trailing zeros kept.
+
+    - If scientific notation is used (very small/large magnitude), use "%.2e".
+    - Otherwise, choose a fixed number of decimals.
+      If `ticks` is provided, decimals are derived from the smallest tick step so that
+      labels like 0.20 are shown when 0.18 exists (same decimals across all ticks).
 
     Parameters
     ----------
@@ -612,6 +725,8 @@ def choose_colorbar_formatter(vmin: float, vmax: float) -> mticker.Formatter:
         Minimum colorbar value.
     vmax : float
         Maximum colorbar value.
+    ticks : np.ndarray | None
+        Optional tick values to derive a stable decimal count.
 
     Returns
     -------
@@ -619,21 +734,51 @@ def choose_colorbar_formatter(vmin: float, vmax: float) -> mticker.Formatter:
         Formatter instance.
 
     """
+    sig = 3
+    sci_low, sci_high = -3, 3  # scientific if exponent <= -3 or >= 3
+
     vr = max(abs(vmin), abs(vmax))
 
-    if vr < 1e-3:  # noqa: PLR2004
-        return mticker.FormatStrFormatter("%.2e")
-
-    if vr < 0.1:  # noqa: PLR2004
-        return mticker.FormatStrFormatter("%.4f")
-
-    if vr < 1:
+    # Handle all-zero (or invalid) ranges
+    if vr == 0 or not math.isfinite(vr):
         return mticker.FormatStrFormatter("%.2f")
 
-    if vr < 100:  # noqa: PLR2004
-        return mticker.FormatStrFormatter("%.2f")
+    exp = math.floor(math.log10(vr))
 
-    return mticker.FormatStrFormatter("%.0f")
+    # Scientific notation
+    if exp <= sci_low or exp >= sci_high:
+        return mticker.FormatStrFormatter(f"%.{sig - 1}e")
+
+    # Fixed decimals
+    decimals_default = max(0, (sig - 1) - exp)
+    decimals = decimals_default
+
+    if ticks is not None:
+        t = np.asarray(ticks, dtype=float)
+        t = t[np.isfinite(t)]
+        t = np.unique(np.sort(t))
+
+        if t.size >= 2:  # noqa: PLR2004
+            diffs = np.diff(t)
+            diffs = diffs[diffs > 0]
+
+            if diffs.size > 0:
+                step = float(np.min(diffs))
+                # decimals so that step is representable (keep trailing zeros)
+                # e.g. step=0.05 -> 2 decimals, step=0.1 -> 1 decimal
+                decimals_from_step = int(max(0, math.ceil(-math.log10(step) - 1e-12)))
+                decimals = max(decimals_default, decimals_from_step)
+
+    def _fmt(x: float, _pos: int | None = None) -> str:
+        s = f"{x:.{decimals}f}"
+
+        # Avoid "-0.00"
+        if float(s) == 0.0:
+            s = s.lstrip("-")
+
+        return s
+
+    return mticker.FuncFormatter(_fmt)
 
 
 # CONTOUR LEVELS
@@ -644,44 +789,39 @@ _MIN_LEVEL_COUNT = 2
 
 def compute_levels(arr: np.ndarray, n: int = 10) -> np.ndarray:
     """
-    Compute robust contour levels using quantiles and rounding.
+    Compute contour levels for given data array.
 
     Parameters
     ----------
     arr : np.ndarray
-        Input array.
-    n : int
-        Number of levels.
+        Input data array.
+    n : int, optional
+        Desired number of levels (default: 10).
 
     Returns
     -------
     np.ndarray
-        Contour levels.
+        Computed contour levels.
 
     """
     arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
 
-    raw = np.quantile(arr, np.linspace(0, 1, n))
-    vmin, vmax = float(arr.min()), float(arr.max())
+    # Use 1st and 99th percentiles to avoid outliers
+    q_lo, q_hi = np.quantile(arr, [0.01, 0.99])
+    vmin, vmax = float(q_lo), float(q_hi)
 
     if vmin == vmax:
         eps = 1e-12
         return np.linspace(vmin - eps, vmax + eps, n)
 
-    raw_safe = np.where(raw == 0.0, 1e-30, raw)
+    # Use MaxNLocator to get "nice" levels
+    locator = mticker.MaxNLocator(nbins=n)
 
-    with np.errstate(divide="ignore", invalid="ignore"):
-        exp = np.floor(np.log10(np.abs(raw_safe)))
-        scale = np.power(10.0, exp - 1)
-        rounded = np.round(raw_safe / scale) * scale
+    levels = np.asarray(locator.tick_values(vmin, vmax), dtype=np.float64)
+    levels = np.unique(levels).astype(np.float64, copy=False)
 
-    levels = np.unique(np.nan_to_num(rounded, nan=vmin))
-
-    if len(levels) < _MIN_LEVEL_COUNT:
-        return np.linspace(vmin, vmax, n)
-
-    if not np.all(np.diff(levels) > 0):
-        return np.linspace(levels[0], levels[-1], n)
+    if len(levels) < _MIN_LEVEL_COUNT or not np.all(np.diff(levels) > 0):
+        levels = np.linspace(vmin, vmax, n, dtype=np.float64)
 
     return levels
 

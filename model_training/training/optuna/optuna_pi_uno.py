@@ -76,7 +76,7 @@ def objective(trial: Trial) -> float:
     """Optuna objective function for PI-UNO hyperparameter optimization."""
     CONFIG: dict[str, object] = dict(copy.deepcopy(BASE_CONFIG))
     # fft or ps
-    CONFIG["pino_loss_type"] = "ps"  # Set loss type for PI-FNO
+    CONFIG["pino_loss_type"] = "fft"  # Set loss type for PI-FNO
 
     # ------------------------------------------------------------
     # Trial identity
@@ -173,6 +173,6 @@ def objective(trial: Trial) -> float:
 if __name__ == "__main__":
     run_optuna_study(
         objective=objective,
-        study_name="optuna_PI-UNO-PS",
+        study_name="optuna_PI-UNO-FFT",
         n_trials=30,
     )

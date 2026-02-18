@@ -34,60 +34,6 @@ CHANNELS = OUTPUT_FIELDS
 CHANNEL_INDICES = {name: i for i, name in enumerate(CHANNELS)}
 
 # =============================================================================
-# INTERNAL HELPERS
-# =============================================================================
-
-
-def _radial_frequency_spectrum(field: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Compute radially averaged 2D FFT power spectrum.
-
-    Parameters
-    ----------
-    field : np.ndarray
-        2D error field.
-
-    Returns
-    -------
-    k : np.ndarray
-        Radial frequency bins (normalized).
-    power : np.ndarray
-        Radially averaged power spectrum.
-
-    """
-    ny, nx = field.shape
-
-    fhat = np.fft.fft2(field)
-    power2d = np.abs(fhat) ** 2
-
-    ky = np.fft.fftfreq(ny)
-    kx = np.fft.fftfreq(nx)
-    KX, KY = np.meshgrid(kx, ky)
-    k_radius = np.sqrt(KX**2 + KY**2)
-
-    k_flat = k_radius.ravel()
-    p_flat = power2d.ravel()
-
-    nbins = min(ny, nx) // 2
-    bins = np.linspace(0.0, k_flat.max(), nbins + 1)
-    bin_idx = np.digitize(k_flat, bins) - 1
-
-    power = np.zeros(nbins)
-    counts = np.zeros(nbins)
-
-    for i in range(nbins):
-        mask = bin_idx == i
-        if np.any(mask):
-            power[i] = p_flat[mask].mean()
-            counts[i] = mask.sum()
-
-    valid = counts > 0
-    k = 0.5 * (bins[:-1] + bins[1:])
-
-    return k[valid], power[valid]
-
-
-# =============================================================================
 # GLOBAL ERROR METRICS
 # =============================================================================
 
@@ -431,7 +377,7 @@ def plot_error_distribution(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBo
         ax_global.set_xticks(xpos)
         ax_global.set_xticklabels(stats)
         ax_global.set_yscale("log")
-        ax_global.set_title(f"Global L2 Summary (first {max_cases} cases)")
+        ax_global.set_title("Global L2 Summary")
         ax_global.grid(True, which="both", axis="y", linestyle="--", alpha=0.3)
 
         # KDE
@@ -440,7 +386,7 @@ def plot_error_distribution(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBo
             if arr.size > 0:
                 sns.kdeplot(arr, ax=ax_local_l2, lw=2, color=color, log_scale=True)
 
-        ax_local_l2.set_title(f"Local L2 Distribution (first {max_cases} cases)")
+        ax_local_l2.set_title("Local L2 Distribution")
         ax_local_l2.grid(True, linestyle="--", alpha=0.3)
 
         # rel quantiles
@@ -452,7 +398,7 @@ def plot_error_distribution(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBo
             ax_local_rel.plot(xpos, vals, marker="o", lw=2, color=palette[idx])
 
         ax_local_rel.set_yscale("log")
-        ax_local_rel.set_title(f"Local Relative L2 Quantiles (first {max_cases} cases)")
+        ax_local_rel.set_title("Local Relative L2 Quantiles")
         ax_local_rel.grid(True, axis="y", linestyle="--", alpha=0.3)
         ax_local_rel.set_xticks(xpos)
         ax_local_rel.set_xticklabels(qstats)
@@ -604,7 +550,7 @@ def plot_global_gt_vs_pred(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox
                 ax.plot([vmin, vmax], [vmin, vmax], "k--", linewidth=1, alpha=0.7)
                 ax.scatter(gt_arr, pred_arr, s=18, alpha=0.45)
 
-                ax.set_title(f"{ch}: RMSE={rmse:.4f}, R2={r2:.3f}", fontsize=11)
+                ax.set_title(f"{ch}: RMSE={rmse:.3g}, R2={r2:.3g}", fontsize=11)
                 ax.grid(alpha=0.3)
 
             axes.append(row_axes)
@@ -778,9 +724,6 @@ def plot_mean_error_maps(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
                     true_abs = np.abs(gt[k])
                     rel = abs_err / (true_abs + 1e-12) * 100.0
                     rel[true_abs < mask_threshold] = np.nan
-                    vmax_rel = float(np.nanquantile(rel, 0.99))
-                    vmax_rel = max(vmax_rel, 1e-6)
-                    rel = np.clip(rel, 0.0, vmax_rel)
 
                     if entry["sum_rel"][ch] is None:
                         entry["sum_rel"][ch] = rel.astype(float)
@@ -817,7 +760,18 @@ def plot_mean_error_maps(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
                 y = np.linspace(0, Ly, ny)
                 X, Y = np.meshgrid(x, y)
 
-                im = ax.contourf(X, Y, mean_map, levels=10, cmap="magma")
+                # robust clip (Ausreisser werden weiss)
+                clip_q = 99.5
+                vmax = float(np.nanpercentile(mean_map, clip_q)) if np.isfinite(mean_map).any() else 0.0
+                vmax = max(vmax, 1e-12)
+
+                mean_plot = np.ma.masked_greater(mean_map, vmax)
+
+                cmap = plt.get_cmap("magma").copy()
+                cmap.set_bad("white")
+
+                levels = np.linspace(0.0, vmax, 11)
+                im = ax.contourf(X, Y, mean_plot, levels=levels, cmap=cmap)
 
                 metric = "MAE" if mode == "MAE" else "rel err [%]"
 
@@ -979,7 +933,17 @@ def plot_std_error_maps(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
                 y = np.linspace(0, Ly, ny)
                 X, Y = np.meshgrid(x, y)
 
-                im = ax.contourf(X, Y, std_map, levels=10, cmap="magma")
+                clip_q = 99.5
+                vmax = float(np.nanpercentile(std_map, clip_q)) if np.isfinite(std_map).any() else 0.0
+                vmax = max(vmax, 1e-12)
+
+                std_plot = np.ma.masked_greater(std_map, vmax)
+
+                cmap = plt.get_cmap("magma").copy()
+                cmap.set_bad("white")
+
+                levels = np.linspace(0.0, vmax, 11)
+                im = ax.contourf(X, Y, std_plot, levels=levels, cmap=cmap)
 
                 if r == 0:
                     ax.set_title(f"{name}\n{ch} STD error", fontsize=12, pad=20)

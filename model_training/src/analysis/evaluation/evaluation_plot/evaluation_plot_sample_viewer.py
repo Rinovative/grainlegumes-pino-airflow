@@ -148,7 +148,7 @@ def _aggregate_kappa(kappa: np.ndarray, kappa_names: list[str]) -> np.ndarray:
 # =============================================================================
 
 
-def plot_sample_prediction_overview(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
+def plot_sample_prediction_overview(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:  # noqa: PLR0915
     """
     Build an interactive 4x4 evaluation viewer for PINO/FNO predictions and permeability fields.
 
@@ -173,16 +173,18 @@ def plot_sample_prediction_overview(*, datasets: dict[str, pd.DataFrame]) -> wid
     mask_threshold = 1e-4
 
     # -------------------------------------------------------------
-    # Error mode selector: MAE vs Relative [%]
+    # Widgets
     # -------------------------------------------------------------
     error_selector = util.util_plot_components.ui_radio_error_mode()
+    pred_scale_selector = util.util_plot_components.ui_radio_pred_scale_mode()
 
-    def _plot(
+    def _plot(  # noqa: PLR0915
         idx: int,
         *,
         df: pd.DataFrame,
         dataset_name: str,
         error_mode: widgets.ValueWidget,
+        pred_scale_mode: widgets.ValueWidget,
     ) -> Figure:
         """
         Plot a single evaluation case with prediction, ground truth, error and kappa.
@@ -197,6 +199,8 @@ def plot_sample_prediction_overview(*, datasets: dict[str, pd.DataFrame]) -> wid
             Name of dataset.
         error_mode : widgets.Widget
             Error mode selector widget.
+        pred_scale_mode : widgets.Widget
+            Prediction scale mode selector widget.
 
         Returns
         -------
@@ -226,24 +230,74 @@ def plot_sample_prediction_overview(*, datasets: dict[str, pd.DataFrame]) -> wid
         kappa_log_levels = util.util_plot_components.compute_levels(kappa_log_field, n_levels)
 
         nrows = 4  # fixed layout
+        shared_mode = pred_scale_mode.value == "Shared (GT)"
 
         for r, label in enumerate(CHANNELS):
             is_last_row = r == nrows - 1
-
-            # -------------------------------------------------
-            # Prediction
-            # -------------------------------------------------
-            ax = axes[r, 0]
             k = CHANNEL_INDICES[label]
-            field = pred[k]
 
-            im = ax.contourf(
-                X,
-                Y,
-                field,
-                levels=util.util_plot_components.compute_levels(field, n_levels),
-                cmap=cmap_pred_true,
-            )
+            # =================================================
+            # SCALE SELECTION
+            # =================================================
+            if shared_mode:
+                # Shared scaling driven by GT
+                gt_field = gt[k]
+                shared_levels = util.util_plot_components.compute_levels(gt_field, n_levels)
+                vmin = float(shared_levels.min())
+                vmax = float(shared_levels.max())
+            else:
+                # Independent scales
+                gt_field = gt[k]
+                gt_levels = util.util_plot_components.compute_levels(gt_field, n_levels)
+
+                pred_field = pred[k]
+                pred_levels = util.util_plot_components.compute_levels(pred_field, n_levels)
+
+            # =================================================
+            # Prediction
+            # =================================================
+            ax = axes[r, 0]
+
+            if shared_mode:
+                pred_field = pred[k]
+                pred_plot = np.ma.masked_outside(pred_field, vmin, vmax)
+
+                cmap_obj = plt.get_cmap(cmap_pred_true).copy()
+                cmap_obj.set_bad("white")
+
+                im = ax.contourf(
+                    X,
+                    Y,
+                    pred_plot,
+                    levels=shared_levels,
+                    cmap=cmap_obj,
+                )
+
+                cb = fig.colorbar(im, ax=ax, fraction=0.04, ticks=shared_levels)
+                cb.formatter = util.util_plot_components.choose_colorbar_formatter(
+                    vmin,
+                    vmax,
+                    ticks=shared_levels,
+                )
+                cb.update_ticks()
+            else:
+                pred_field = pred[k]
+
+                im = ax.contourf(
+                    X,
+                    Y,
+                    pred_field,
+                    levels=pred_levels,
+                    cmap=cmap_pred_true,
+                )
+
+                cb = fig.colorbar(im, ax=ax, fraction=0.04, ticks=pred_levels)
+                cb.formatter = util.util_plot_components.choose_colorbar_formatter(
+                    float(pred_levels.min()),
+                    float(pred_levels.max()),
+                    ticks=pred_levels,
+                )
+                cb.update_ticks()
 
             if label in {"u", "v", "U"}:
                 u = pred[CHANNEL_INDICES["u"]]
@@ -251,24 +305,45 @@ def plot_sample_prediction_overview(*, datasets: dict[str, pd.DataFrame]) -> wid
                 util.util_plot_components.overlay_streamlines(ax, X, Y, u, v)
 
             ax.set_title(f"{label} pred [{UNIT_MAP[label]}]")
-            cb = fig.colorbar(im, ax=ax, fraction=0.04)
-            cb.ax.yaxis.set_major_formatter(util.util_plot_components.choose_colorbar_formatter(*im.get_clim()))
             util.util_plot_components.apply_axis_labels(ax, 0, Lx, Ly, is_last_row=is_last_row)
 
-            # -------------------------------------------------
+            # =================================================
             # Ground truth
-            # -------------------------------------------------
+            # =================================================
             ax = axes[r, 1]
-            k = CHANNEL_INDICES[label]
-            field = gt[k]
 
-            im = ax.contourf(
-                X,
-                Y,
-                field,
-                levels=util.util_plot_components.compute_levels(field, n_levels),
-                cmap=cmap_pred_true,
-            )
+            if shared_mode:
+                im = ax.contourf(
+                    X,
+                    Y,
+                    gt_field,
+                    levels=shared_levels,
+                    cmap=cmap_pred_true,
+                )
+
+                cb = fig.colorbar(im, ax=ax, fraction=0.04, ticks=shared_levels)
+                cb.formatter = util.util_plot_components.choose_colorbar_formatter(
+                    vmin,
+                    vmax,
+                    ticks=shared_levels,
+                )
+                cb.update_ticks()
+            else:
+                im = ax.contourf(
+                    X,
+                    Y,
+                    gt_field,
+                    levels=gt_levels,
+                    cmap=cmap_pred_true,
+                )
+
+                cb = fig.colorbar(im, ax=ax, fraction=0.04, ticks=gt_levels)
+                cb.formatter = util.util_plot_components.choose_colorbar_formatter(
+                    float(gt_levels.min()),
+                    float(gt_levels.max()),
+                    ticks=gt_levels,
+                )
+                cb.update_ticks()
 
             if label in {"u", "v", "U"}:
                 u = gt[CHANNEL_INDICES["u"]]
@@ -276,44 +351,66 @@ def plot_sample_prediction_overview(*, datasets: dict[str, pd.DataFrame]) -> wid
                 util.util_plot_components.overlay_streamlines(ax, X, Y, u, v)
 
             ax.set_title(f"{label} true [{UNIT_MAP[label]}]")
-            cb = fig.colorbar(im, ax=ax, fraction=0.04)
-            cb.ax.yaxis.set_major_formatter(util.util_plot_components.choose_colorbar_formatter(*im.get_clim()))
             util.util_plot_components.apply_axis_labels(ax, 1, Lx, Ly, is_last_row=is_last_row)
 
-            # -------------------------------------------------
+            # =================================================
             # Error
-            # -------------------------------------------------
+            # =================================================
             ax = axes[r, 2]
+
             if error_mode.value == "MAE":
-                k = CHANNEL_INDICES[label]
-                err_field = np.abs(err[k])
-                true_abs = np.abs(gt[k])
+                err_field = np.abs(err[k]).astype(float)
                 err_field = np.nan_to_num(err_field, nan=0.0)
-                levels_err = np.linspace(0.0, np.nanquantile(err_field, 0.99), n_levels)
                 err_title = f"{label} MAE [{UNIT_MAP[label]}]"
             else:
-                k = CHANNEL_INDICES[label]
-                abs_err = np.abs(err[k])
-                true_abs = np.abs(gt[k])
+                abs_err = np.abs(err[k]).astype(float)
+                true_abs = np.abs(gt[k]).astype(float)
                 err_field = abs_err / (true_abs + 1e-12) * 100.0
                 err_field[true_abs < mask_threshold] = np.nan
-                levels_err = np.linspace(0.0, np.nanquantile(err_field, 0.99), n_levels)
                 err_title = f"{label} rel err [%]"
 
-            im = ax.contourf(X, Y, err_field, levels=levels_err, cmap=cmap_error)
-            ax.set_title(err_title)
-            cb = fig.colorbar(im, ax=ax, fraction=0.04)
-            cb.ax.yaxis.set_major_formatter(util.util_plot_components.choose_colorbar_formatter(*im.get_clim()))
-            util.util_plot_components.apply_axis_labels(ax, 2, Lx, Ly, is_last_row=is_last_row)
+            valid = err_field[np.isfinite(err_field)]
+            if valid.size == 0:
+                ax.set_title(err_title)
+                ax.axis("off")
+            else:
+                clip_q = 0.99
+                vmax_err = float(np.nanquantile(valid, clip_q))
+                vmax_err = max(vmax_err, 1e-12)
 
-            # -------------------------------------------------
+                levels_err = np.linspace(0.0, vmax_err, n_levels, dtype=np.float64)
+
+                err_plot = np.ma.masked_greater(err_field, vmax_err)
+                cmap_obj = plt.get_cmap(cmap_error).copy()
+                cmap_obj.set_bad("white")
+
+                im = ax.contourf(X, Y, err_plot, levels=levels_err, cmap=cmap_obj)
+
+                ax.set_title(err_title)
+                cb = fig.colorbar(im, ax=ax, fraction=0.04, ticks=levels_err)
+                cb.formatter = util.util_plot_components.choose_colorbar_formatter(
+                    0.0,
+                    vmax_err,
+                    ticks=levels_err,
+                )
+                cb.update_ticks()
+
+                util.util_plot_components.apply_axis_labels(ax, 2, Lx, Ly, is_last_row=is_last_row)
+
+            # =================================================
             # Kappa panels
-            # -------------------------------------------------
+            # =================================================
             ax = axes[r, 3]
             if r == 0:
                 im = ax.contourf(X, Y, kappa_field, levels=kappa_levels, cmap=cmap_kappa)
                 ax.set_title("kappa [m²]")
-                fig.colorbar(im, ax=ax, fraction=0.04)
+                cb = fig.colorbar(im, ax=ax, fraction=0.04, ticks=kappa_levels)
+                cb.formatter = util.util_plot_components.choose_colorbar_formatter(
+                    float(kappa_levels.min()),
+                    float(kappa_levels.max()),
+                    ticks=kappa_levels,
+                )
+                cb.update_ticks()
                 util.util_plot_components.apply_axis_labels(ax, 3, Lx, Ly, is_last_row=is_last_row)
 
             elif r == 1:
@@ -325,13 +422,22 @@ def plot_sample_prediction_overview(*, datasets: dict[str, pd.DataFrame]) -> wid
                     cmap=cmap_kappa,
                 )
                 ax.set_title("log10(kappa) [m²]")
-                fig.colorbar(im, ax=ax, fraction=0.04)
+                cb = fig.colorbar(im, ax=ax, fraction=0.04, ticks=kappa_log_levels)
+                cb.formatter = util.util_plot_components.choose_colorbar_formatter(
+                    float(kappa_log_levels.min()),
+                    float(kappa_log_levels.max()),
+                    ticks=kappa_log_levels,
+                )
+                cb.update_ticks()
                 util.util_plot_components.apply_axis_labels(ax, 3, Lx, Ly, is_last_row=is_last_row)
 
             else:
                 ax.axis("off")
 
-        fig.suptitle(f"{dataset_name} — Case {idx + 1}", fontsize=14)
+        fig.suptitle(
+            f"{dataset_name} - Case {idx + 1} - Scale: {pred_scale_mode.value}",
+            fontsize=14,
+        )
         fig.tight_layout()
         return fig
 
@@ -340,8 +446,9 @@ def plot_sample_prediction_overview(*, datasets: dict[str, pd.DataFrame]) -> wid
         datasets=datasets,
         start_idx=0,
         enable_dataset_dropdown=True,
-        extra_widgets=[error_selector],
+        extra_widgets=[pred_scale_selector, error_selector],
         error_mode=error_selector,
+        pred_scale_mode=pred_scale_selector,
     )
 
 
@@ -350,7 +457,7 @@ def plot_sample_prediction_overview(*, datasets: dict[str, pd.DataFrame]) -> wid
 # =============================================================================
 
 
-def plot_sample_kappa_tensor_with_overlay(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
+def plot_sample_kappa_tensor_with_overlay(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:  # noqa: PLR0915
     """
     Build an interactive viewer for permeability tensor components with error overlay.
 
@@ -571,8 +678,9 @@ def plot_sample_kappa_tensor_with_overlay(*, datasets: dict[str, pd.DataFrame]) 
                 is_last_row=(r == nrows - 1),
             )
 
-            cb = fig.colorbar(im, ax=ax, fraction=0.045)
-            cb.ax.yaxis.set_major_formatter(util.util_plot_components.choose_colorbar_formatter(*im.get_clim()))
+            cb = fig.colorbar(im, ax=ax, fraction=0.045, ticks=levels)
+            cb.formatter = util.util_plot_components.choose_colorbar_formatter(float(levels.min()), float(levels.max()))
+            cb.update_ticks()
 
         # --------------------------------------------------
         # Right column: GT
@@ -586,8 +694,9 @@ def plot_sample_kappa_tensor_with_overlay(*, datasets: dict[str, pd.DataFrame]) 
             ax_gt.contour(X, Y, err_field, levels=err_levels, cmap=cmap_error, linewidths=1.0)
 
         ax_gt.set_title(f"{channel_name} true [{UNIT_MAP[channel_name]}]")
-        cb = fig.colorbar(im, ax=ax_gt, fraction=0.045)
-        cb.ax.yaxis.set_major_formatter(util.util_plot_components.choose_colorbar_formatter(*im.get_clim()))
+        cb = fig.colorbar(im, ax=ax_gt, fraction=0.045, ticks=gt_levels)
+        cb.formatter = util.util_plot_components.choose_colorbar_formatter(float(gt_levels.min()), float(gt_levels.max()))
+        cb.update_ticks()
 
         util.util_plot_components.apply_axis_labels(ax_gt, ncols, Lx, Ly, is_last_row=False)
 
@@ -595,14 +704,29 @@ def plot_sample_kappa_tensor_with_overlay(*, datasets: dict[str, pd.DataFrame]) 
         # Right column: error field
         # --------------------------------------------------
         ax_err = axes[1, -1]
-        err_levels_full = util.util_plot_components.compute_levels(err_field)
 
-        im = ax_err.contourf(X, Y, err_field, levels=err_levels_full, cmap=cmap_error)
+        valid = err_field[np.isfinite(err_field)]
         unit = "MAE" if error_mode.value == "MAE" else "rel [%]"
         ax_err.set_title(f"{channel_name} error [{unit}]")
 
-        cb = fig.colorbar(im, ax=ax_err, fraction=0.045)
-        cb.ax.yaxis.set_major_formatter(util.util_plot_components.choose_colorbar_formatter(*im.get_clim()))
+        if valid.size == 0:
+            ax_err.axis("off")
+        else:
+            clip_q = 0.99
+            vmax = float(np.nanquantile(valid, clip_q))
+            vmax = max(vmax, 1e-12)
+
+            levels = np.linspace(0.0, vmax, n_kappa_levels, dtype=np.float64)
+
+            err_plot = np.ma.masked_greater(err_field, vmax)
+            cmap_obj = plt.get_cmap(cmap_error).copy()
+            cmap_obj.set_bad("white")
+
+            im = ax_err.contourf(X, Y, err_plot, levels=levels, cmap=cmap_obj)
+
+            cb = fig.colorbar(im, ax=ax_err, fraction=0.045, ticks=levels)
+            cb.formatter = util.util_plot_components.choose_colorbar_formatter(0.0, vmax)
+            cb.update_ticks()
 
         util.util_plot_components.apply_axis_labels(ax_err, ncols, Lx, Ly, is_last_row=True)
 

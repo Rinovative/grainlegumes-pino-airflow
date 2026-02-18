@@ -25,13 +25,13 @@ if TYPE_CHECKING:
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 RAW_ROOT = PROJECT_ROOT / "data" / "raw"
-PROCESSED_ROOT = PROJECT_ROOT / "model_training" / "data" / "processed" / "optuna"
+PROCESSED_ROOT = PROJECT_ROOT / "model_training" / "data" / "processed"
 
 ID_DATASET = "lhs_var80_seed3001"
 OOD_DATASETS = ["lhs_var120_seed4001"]
 
 # Anzahl Cases begrenzen (None = alle)
-MAX_CASES: int | None = 200
+MAX_CASES: int | None = None
 # ======================================================================
 # Utilities
 # ======================================================================
@@ -76,20 +76,34 @@ def run_or_load_artifacts(
     dataset_path = RAW_ROOT / dataset_name / "cases"
 
     save_root = run_dir / "analysis" / "id" if dataset_name == ID_DATASET else run_dir / "analysis" / "ood" / dataset_name
-
+    npz_dir = save_root / "npz"
     parquet_path = save_root / f"{dataset_name}.parquet"
 
+    print(f"[RUN] {model_name} | {dataset_name}")
+    print(f"      checkpoint={checkpoint_path}")
+    print(f"      save_root={save_root}")
+
+    # --------------------------------------------------
+    # HARD SKIP: artifacts already exist
+    # --------------------------------------------------
     if parquet_path.exists():
-        print(f"[LOAD] {model_name} | {dataset_name}")
+        print(f"[LOAD] {model_name} | {dataset_name} (parquet)")
         return pd.read_parquet(parquet_path)
 
-    print(f"[RUN ] {model_name} | {dataset_name}")
+    if npz_dir.exists() and any(npz_dir.glob("*.npz")):
+        print(f"[SKIP] {model_name} | {dataset_name} (npz exists, no parquet)")
+        return pd.DataFrame()
 
-    model, loader, processor, device = analysis.analysis_interference.load_inference_context(
-        dataset_path=dataset_path,
-        checkpoint_path=checkpoint_path,
-        batch_size=1,
-    )
+    try:
+        model, loader, processor, device = analysis.analysis_interference.load_inference_context(
+            dataset_path=dataset_path,
+            checkpoint_path=checkpoint_path,
+            batch_size=1,
+        )
+    except Exception as e:  # noqa: BLE001
+        print(f"[SKIP] {model_name} | {dataset_name}")
+        print(f"       Reason: {type(e).__name__}: {e}")
+        return pd.DataFrame()
 
     df, _ = analysis.analysis_artifacts.generate_artifacts(
         model=model,
@@ -129,6 +143,9 @@ def main() -> None:
             dataset_name=ID_DATASET,
             max_cases=MAX_CASES,
         )
+        if df_raw_id.empty:
+            print(f"[SKIP] {model_name} | ID evaluation skipped")
+            continue
         _ = evaluation.evaluation_dataframe.build_eval_df(df_raw_id)
 
         # -----------------
@@ -140,6 +157,10 @@ def main() -> None:
                 dataset_name=ood,
                 max_cases=MAX_CASES,
             )
+
+            if df_raw_ood.empty:
+                print(f"[SKIP] {model_name} | OOD {ood} skipped")
+                continue
 
             _ = evaluation.evaluation_dataframe.build_eval_df(df_raw_ood)
 

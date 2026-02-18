@@ -41,6 +41,7 @@ from neuralop.data.transforms.normalizers import UnitGaussianNormalizer
 from neuralop.models import FNO
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
+from training.train_uno import UNOWithCheckpoint
 
 from src.dataset.dataset_simulation import PhysicsDataset
 from src.schema.schema_training import DEFAULT_INPUTS_2D, DEFAULT_OUTPUTS_2D
@@ -100,10 +101,10 @@ def _build_model_from_config(model_cfg: dict[str, Any]) -> nn.Module:
     """
     arch = model_cfg["architecture"]
     params = dict(model_cfg["model_params"])
-
-    if arch != "FNO":
-        msg = f"Unknown architecture: {arch}"
-        raise NotImplementedError(msg)
+    # FIX: JSON -> int keys for horizontal_skips_map
+    hsm = params.get("horizontal_skips_map")
+    if isinstance(hsm, dict):
+        params["horizontal_skips_map"] = {int(k): int(v) for k, v in hsm.items()}
 
     # Convert JSON single-element lists to scalars
     for key in ["channel_mlp_skip", "fno_skip"]:
@@ -111,7 +112,14 @@ def _build_model_from_config(model_cfg: dict[str, Any]) -> nn.Module:
         if isinstance(val, list) and len(val) == 1:
             params[key] = val[0]
 
-    return FNO(**params)
+    if arch == "FNO":
+        return FNO(**params)
+
+    if arch in {"UNO", "UNOWithCheckpoint"}:
+        return UNOWithCheckpoint(**params)
+
+    msg = f"Unknown architecture: {arch}"
+    raise NotImplementedError(msg)
 
 
 # ======================================================================

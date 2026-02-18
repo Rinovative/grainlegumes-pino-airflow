@@ -9,6 +9,7 @@ This module provides high-level summary plots intended for:
 
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -41,169 +42,133 @@ EPS = 1e-12
 # =============================================================================
 # NPZ loading (local copy)
 # =============================================================================
-def _load_npz(row: pd.Series) -> dict[str, Any]:
+def _parse_npz_meta(meta_obj: Any) -> dict[str, Any]:
     """
-    Load prediction data from NPZ file.
+    Parse 'meta' object from NPZ file into a dictionary.
 
     Parameters
     ----------
-    row : pandas.Series
-        DataFrame row containing 'npz_path'.
+    meta_obj : Any
+        The 'meta' object loaded from NPZ.
 
     Returns
     -------
-    dict
-        Dictionary with pred, gt, kappa, kappa_names, p_bc, meta.
+    dict[str, Any]
+        Parsed metadata dictionary.
 
     """
-    data = np.load(row["npz_path"], allow_pickle=True)
+    if meta_obj is None:
+        return {}
 
-    return {
-        "pred": np.asarray(data["pred"]),
-        "gt": np.asarray(data["gt"]),
-        "kappa": np.asarray(data["kappa"]),
-        "kappa_names": [str(n) for n in data["kappa_names"]],
-        "p_bc": np.asarray(data["p_bc"]),
-        "meta": data.get("meta", {}),
-    }
+    # numpy scalar -> python obj
+    if isinstance(meta_obj, np.ndarray) and meta_obj.shape == ():
+        meta_obj = meta_obj.item()
 
+    if isinstance(meta_obj, dict):
+        return meta_obj
 
-# =============================================================================
-# Physics: Darcy-Brinkman residual (NumPy, identical to PINOLoss)
-# =============================================================================
-def _compute_brinkman_residual(
-    *,
-    p: np.ndarray,
-    u: np.ndarray,
-    v: np.ndarray,
-    kappa: np.ndarray,
-    kappa_names: list[str],
-    Lx: float,
-    Ly: float,
-) -> np.ndarray:
-    """
-    Compute Darcy-Brinkman residual magnitude |R|.
+    if isinstance(meta_obj, (str, bytes)):
+        s = meta_obj.decode("utf-8") if isinstance(meta_obj, bytes) else meta_obj
+        s = s.strip()
+        if not s:
+            return {}
 
-    R = -∇p + div(mu * viscous stress) - mu * K^{-1} u
-    """
-    ny, nx = u.shape
-    dx = Lx / (nx - 1)
-    dy = Ly / (ny - 1)
+        # zuerst JSON versuchen
+        try:
+            out = json.loads(s)
+            return out if isinstance(out, dict) else {}
+        except Exception:  # noqa: BLE001, S110
+            pass
 
-    # --------------------------------------------------
-    # Gradients
-    # --------------------------------------------------
-    dpdx = np.gradient(p, dx, axis=1)
-    dpdy = np.gradient(p, dy, axis=0)
+        # fallback: Python literal eval (dein Beispiel sieht genau so aus)
+        try:
+            out = ast.literal_eval(s)
+            return out if isinstance(out, dict) else {}
+        except Exception:  # noqa: BLE001
+            return {}
 
-    dudx = np.gradient(u, dx, axis=1)
-    dudy = np.gradient(u, dy, axis=0)
-    dvdx = np.gradient(v, dx, axis=1)
-    dvdy = np.gradient(v, dy, axis=0)
-
-    # --------------------------------------------------
-    # Viscous stress (phi = 1)
-    # --------------------------------------------------
-    mu = MU_AIR
-
-    Kxx = mu * (2.0 * dudx) - (2.0 / 3.0) * mu * (dudx + dvdy)
-    Kyy = mu * (2.0 * dvdy) - (2.0 / 3.0) * mu * (dudx + dvdy)
-    Kxy = mu * (dudy + dvdx)
-
-    divKx = np.gradient(Kxx, dx, axis=1) + np.gradient(Kxy, dy, axis=0)
-    divKy = np.gradient(Kxy, dx, axis=1) + np.gradient(Kyy, dy, axis=0)
-
-    # --------------------------------------------------
-    # Permeability tensor handling
-    # --------------------------------------------------
-    idx = {name: i for i, name in enumerate(kappa_names)}
-
-    kxx = kappa[idx["kxx"]]
-    kyy = kappa[idx["kyy"]]
-    kxy_rel = kappa[idx["kxy"]] if "kxy" in idx else 0.0
-
-    K0 = np.sqrt(np.maximum(kxx * kyy, 1e-30))
-
-    kxx_hat = kxx / K0
-    kyy_hat = kyy / K0
-    kxy_hat = np.clip(kxy_rel, -0.99, 0.99)
-
-    det_hat = kxx_hat * kyy_hat - kxy_hat**2
-    det_hat = np.maximum(det_hat, EPS_DET)
-
-    inv_xx = (kyy_hat / det_hat) / K0
-    inv_xy = (-kxy_hat / det_hat) / K0
-    inv_yy = (kxx_hat / det_hat) / K0
-
-    drag_x = MU_AIR * (inv_xx * u + inv_xy * v)
-    drag_y = MU_AIR * (inv_xy * u + inv_yy * v)
-
-    # --------------------------------------------------
-    # Residual
-    # --------------------------------------------------
-    Rx = -dpdx + divKx - drag_x
-    Ry = -dpdy + divKy - drag_y
-
-    return np.sqrt(Rx**2 + Ry**2)
+    return {}
 
 
 # =============================================================================
 # Scalar physics metric
 # =============================================================================
-def _median_physics_residual(df: pd.DataFrame, max_cases: int = 100) -> float:
+def _combined_physics_mse(
+    df: pd.DataFrame,
+    *,
+    use_full: bool = False,
+    include_bc: bool = False,
+) -> np.ndarray:
     """
-    Compute median normalised physics residual over cases.
+    Combine physics MSE score array.
 
     Parameters
     ----------
     df : pandas.DataFrame
-        DataFrame containing evaluation cases.
+        Evaluation DataFrame containing physics metrics.
+    use_full : bool, optional
+        Whether to use full-domain metrics, by default False.
+    include_bc : bool, optional
+        Whether to include boundary condition metrics, by default False.
+
+    Returns
+    -------
+    numpy.ndarray
+        Combined physics MSE score array.
+
+    """
+    mom_col = "mom_mse_full" if use_full and "mom_mse_full" in df.columns else "mom_mse"
+    cont_col = "cont_mse_divu" if "cont_mse_divu" in df.columns else "cont_mse_full" if use_full and "cont_mse_full" in df.columns else "cont_mse"
+    bc_col = "bc_mse"
+
+    if mom_col not in df.columns or cont_col not in df.columns:
+        return np.full(len(df), np.nan, dtype=float)
+
+    mom = pd.to_numeric(df[mom_col], errors="coerce").to_numpy(dtype=float)
+    cont = pd.to_numeric(df[cont_col], errors="coerce").to_numpy(dtype=float)
+
+    score = mom + cont
+
+    if include_bc and bc_col in df.columns:
+        bc = pd.to_numeric(df[bc_col], errors="coerce").to_numpy(dtype=float)
+        score = score + bc
+
+    return score
+
+
+def _median_physics_residual(
+    df: pd.DataFrame,
+    max_cases: int = 500,
+    *,
+    use_full: bool = False,
+    include_bc: bool = False,
+) -> float:
+    """
+    Median combined physics residual score over cases.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Evaluation DataFrame containing physics metrics.
     max_cases : int, optional
-        Maximum number of cases to consider, by default 100.
+        Maximum number of cases to consider, by default 500.
+    use_full : bool, optional
+        Whether to use full-domain metrics, by default False.
+    include_bc : bool, optional
+        Whether to include boundary condition metrics, by default False.
 
     Returns
     -------
     float
-        Median normalised physics residual.
+        Median combined physics residual score.
 
     """
-    vals: list[float] = []
-
     df_i = df.reset_index(drop=True).iloc[:max_cases]
 
-    for _, row in df_i.iterrows():
-        data = _load_npz(row)
+    score = _combined_physics_mse(df_i, use_full=use_full, include_bc=include_bc)
+    score = score[np.isfinite(score)]
 
-        pred = data["pred"]
-        kappa = data["kappa"]
-        kappa_names = data["kappa_names"]
-
-        Lx = float(row["geometry_Lx"])
-        Ly = float(row["geometry_Ly"])
-        L = max(Lx, Ly)
-
-        p = pred[CHANNEL_INDICES["p"]]
-        u = pred[CHANNEL_INDICES["u"]]
-        v = pred[CHANNEL_INDICES["v"]]
-
-        R = _compute_brinkman_residual(
-            p=p,
-            u=u,
-            v=v,
-            kappa=kappa,
-            kappa_names=kappa_names,
-            Lx=Lx,
-            Ly=Ly,
-        )
-
-        U = np.sqrt(u**2 + v**2)
-        denom = max(np.mean(U) / (L**2), 1e-6)
-
-        Rnorm = np.mean(R) / denom
-        if np.isfinite(Rnorm):
-            vals.append(float(Rnorm))
-
-    return float(np.median(vals)) if vals else float("nan")
+    return float(np.median(score)) if score.size else float("nan")
 
 
 # =============================================================================
@@ -221,8 +186,16 @@ def _load_model_metadata(df: pd.DataFrame) -> dict[str, Any]:
         return {}
 
     npz_path = Path(df.iloc[0]["npz_path"])
-    run_dir = npz_path.parents[3]
-    cfg_path = run_dir / "config.json"
+
+    cfg_path = None
+    for p in npz_path.parents:
+        cand = p / "config.json"
+        if cand.exists():
+            cfg_path = cand
+            break
+
+    if cfg_path is None:
+        return {}
 
     if not cfg_path.exists():
         return {}
@@ -282,7 +255,20 @@ def _load_model_metadata(df: pd.DataFrame) -> dict[str, Any]:
     meta["lambda_phys"] = physics.get("lambda_phys")
     meta["lambda_p"] = physics.get("lambda_p")
 
+    if "physics_variant" in df.columns and not df["physics_variant"].isna().all():
+        try:
+            meta["physics_variant"] = str(df["physics_variant"].iloc[0])
+        except Exception:  # noqa: BLE001
+            meta["physics_variant"] = None
+    else:
+        meta["physics_variant"] = None
+
     return meta
+
+
+# =============================================================================
+# Styling helpers
+# =============================================================================
 
 
 def _fmt_optional(x: Any, fmt: str) -> str:
@@ -305,6 +291,25 @@ def _fmt_optional(x: Any, fmt: str) -> str:
     if x is None or not np.isfinite(x):
         return ""
     return fmt.format(x)
+
+
+def _fmt_int_if_close(x: Any) -> str:
+    """Format numbers without decimals if they are (almost) integers."""
+    if x is None:
+        return ""
+    try:
+        xf = float(x)
+    except Exception:  # noqa: BLE001
+        return str(x)
+
+    if not np.isfinite(xf):
+        return ""
+
+    if abs(xf - round(xf)) < 1e-9:  # noqa: PLR2004
+        return str(round(xf))
+
+    # kompakt, ohne unnötige Nachkommastellen
+    return f"{xf:g}"
 
 
 def _style_numeric_block_blue(block: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
@@ -335,17 +340,121 @@ def _style_numeric_block_blue(block: pd.DataFrame, columns: list[str]) -> pd.Dat
         if not np.any(np.isfinite(vals)):
             continue
 
-        vmin = np.nanmin(vals)
-        vmax = np.nanmax(vals)
+        qlo, qhi = np.nanquantile(vals, 0.05), np.nanquantile(vals, 0.95)
+        vmin, vmax = qlo, qhi
 
         for i, v in zip(block.index, vals, strict=False):
             if not np.isfinite(v):
                 continue
             t = 0.0 if vmax == vmin else (v - vmin) / (vmax - vmin)
-            r, g, b, _ = cmap(0.3 + 0.6 * t)  # avoid white
-            styled.loc[i, col] = f"background-color: rgba({int(r * 255)}, {int(g * 255)}, {int(b * 255)}, 0.65)"
+            t = float(np.clip(t, 0.0, 1.0))
+            lo, hi = 0.05, 0.95
+            r, g, b, _ = cmap(lo + (hi - lo) * t)
+            alpha = 0.55
+            styled.loc[i, col] = f"background-color: rgba({int(r * 255)}, {int(g * 255)}, {int(b * 255)}, {alpha})"
 
     return styled
+
+
+# =============================================================================
+# Global summary tables
+# =============================================================================
+def build_global_summary_table(
+    datasets_eval: dict[str, pd.DataFrame],
+    *,
+    metrics: tuple[str, ...] = ("rel_l2", "l2", "rel_h1", "h1", "mom_mse", "cont_mse", "bc_mse"),
+    stats: tuple[str, ...] = ("median", "mean", "q90", "q95"),
+) -> pd.DataFrame:
+    """
+    Build global summary table for multiple evaluation DataFrames.
+
+    Parameters
+    ----------
+    datasets_eval : dict[str, pandas.DataFrame]
+        Dictionary mapping model names to their evaluation DataFrames.
+    metrics : tuple[str, ...], optional
+        Metrics to include, by default ("rel_l2", "l2", "rel_h1", "h1", "mom_mse", "cont_mse", "bc_mse").
+    stats : tuple[str, ...], optional
+        Statistics to include, by default ("median", "mean", "q90", "q95").
+    sort_by : str, optional
+        Column to sort by, by default "rel_l2_median".
+
+    Returns
+    -------
+    pandas.DataFrame
+        Summary DataFrame with computed statistics.
+
+    """
+    stat_fns = {
+        "median": lambda a: float(np.nanmedian(a)),
+        "mean": lambda a: float(np.nanmean(a)),
+        "q90": lambda a: float(np.nanquantile(a, 0.90)),
+        "q95": lambda a: float(np.nanquantile(a, 0.95)),
+    }
+
+    rows: list[dict[str, float | str]] = []
+    for name, df in datasets_eval.items():
+        row: dict[str, float | str] = {"model": name}
+
+        for m in metrics:
+            if m not in df.columns:
+                msg = f"Missing column '{m}' in eval df for model '{name}'"
+                raise KeyError(msg)
+
+            arr = pd.to_numeric(df[m], errors="coerce").to_numpy(dtype=float)
+            for s in stats:
+                if s not in stat_fns:
+                    msg = f"Unknown stat '{s}'"
+                    raise KeyError(msg)
+                row[f"{m}_{s}"] = stat_fns[s](arr)
+
+        rows.append(row)
+
+    return pd.DataFrame(rows).set_index("model")
+
+
+def plot_overview_global_summary_table(
+    *,
+    datasets: dict[str, pd.DataFrame],
+    title: str = "Global summary",
+    metrics: tuple[str, ...] = ("rel_l2", "l2", "rel_h1", "h1", "mom_mse", "cont_mse", "bc_mse"),
+    stats: tuple[str, ...] = ("median", "mean", "q90", "q95"),
+) -> widgets.VBox:
+    """
+    Plot global summary table as a widget.
+
+    Parameters
+    ----------
+    datasets : dict[str, pandas.DataFrame]
+        Dictionary mapping model names to their evaluation DataFrames.
+    title : str, optional
+        Title for the table, by default "Global summary".
+    metrics : tuple[str, ...], optional
+        Metrics to include, by default ("rel_l2", "l2", "rel_h1", "h1", "mom_mse", "cont_mse", "bc_mse").
+    stats : tuple[str, ...], optional
+        Statistics to include, by default ("median", "mean", "q90", "q95").
+    sort_by : str, optional
+        Column to sort by, by default "rel_l2_median".
+    number_fmt : str, optional
+        Format string for numbers, by default "{:.3e}".
+
+    """
+    summary = build_global_summary_table(
+        datasets_eval=datasets,
+        metrics=metrics,
+        stats=stats,
+    )
+
+    out = widgets.Output()
+    with out:
+        display(Markdown(f"## {title}"))
+
+        cols_to_style = [c for c in summary.columns if pd.api.types.is_numeric_dtype(summary[c])]
+        style_df = _style_numeric_block_blue(summary, cols_to_style)
+
+        display(summary.style.format("{:.4g}").apply(lambda _: style_df, axis=None))
+
+    return widgets.VBox([out])
 
 
 # =============================================================================
@@ -437,27 +546,39 @@ def plot_overview_pareto_error_vs_physics(*, datasets: dict[str, pd.DataFrame]) 
         The generated Pareto figure.
 
     """
-    fig, ax = plt.subplots(figsize=(16, 8))
+    fig, ax = plt.subplots(figsize=(10, 6))
 
     for name, df in datasets.items():
-        x = float(np.median(df["rel_l2"]))
-        y = _median_physics_residual(df)
+        x = float(np.nanmedian(pd.to_numeric(df["rel_l2"], errors="coerce")))
+
+        if "mom_mse" not in df.columns:
+            msg = f"Missing column 'mom_mse' for model '{name}'"
+            raise KeyError(msg)
+
+        y = float(np.nanmedian(pd.to_numeric(df["mom_mse"], errors="coerce")))
 
         ax.scatter(x, y, s=80)
-        ax.text(x, y, f" {name}", va="center", fontsize=10)
+        ax.annotate(
+            name,
+            xy=(x, y),
+            xytext=(6, 0),
+            textcoords="offset points",
+            va="center",
+            ha="left",
+            fontsize=10,
+        )
 
-    ax.set_xscale("log")
     ax.set_yscale("log")
-    ax.set_xlabel("Median relative L2 error")
-    ax.set_ylabel("Median physics residual")
+    ax.set_xlabel(r"Median relative $L^2$ error")
+    ax.set_ylabel("Median momentum residual (MSE)")
     ax.set_title("Pareto: accuracy vs physics consistency")
     ax.grid(True, which="both", linestyle="--", alpha=0.3)
 
     fig.subplots_adjust(
-        left=0.15,
-        right=0.75,
-        bottom=0.15,
-        top=0.90,
+        left=0.12,
+        right=0.98,
+        bottom=0.16,
+        top=0.88,
     )
 
     return fig
@@ -484,7 +605,8 @@ def _build_single_architecture_table(
         Styled DataFrame for display.
 
     """
-    df_arch = df_arch.sort_values("rel_l2", ascending=True).reset_index(drop=True)
+    df_arch = df_arch.sort_values("__order", ascending=True).reset_index(drop=True)
+    df_arch = df_arch.drop(columns=["__order"])
 
     style_df = pd.DataFrame("", index=df_arch.index, columns=df_arch.columns)
 
@@ -493,20 +615,9 @@ def _build_single_architecture_table(
 
     style_df.loc[:, :] = _style_numeric_block_blue(df_arch, cols_to_style)
 
-    return (
-        df_arch.style.format(
-            {
-                "rel_l2": "{:.3e}",
-                "l2": "{:.3e}",
-                "physics": "{:.3e}",
-                "lambda_phys": lambda x: _fmt_optional(x, "{:.1e}"),
-                "lambda_p": lambda x: _fmt_optional(x, "{:.1e}"),
-                "mode_ratio": lambda x: _fmt_optional(x, "{:.2f}"),
-            }
-        )
-        .set_caption(f"Architecture: {arch_name}")
-        .apply(lambda _: style_df, axis=None)
-    )
+    fmt: dict[Any, Any] = {c: "{:.4g}" for c in df_arch.columns if pd.api.types.is_numeric_dtype(df_arch[c])}
+
+    return df_arch.style.format(fmt).set_caption(f"Architecture: {arch_name}").apply(lambda _: style_df, axis=None)
 
 
 def plot_overview_architecture_table(*, datasets: dict[str, pd.DataFrame]) -> widgets.VBox:
@@ -530,8 +641,10 @@ def plot_overview_architecture_table(*, datasets: dict[str, pd.DataFrame]) -> wi
         meta = _load_model_metadata(df)
         rows.append(
             {
+                "__order": len(rows),
                 "model": name,
                 "architecture": meta.get("architecture"),
+                "physics_variant": meta.get("physics_variant"),
                 "modes_x": meta.get("modes_x"),
                 "modes_y": meta.get("modes_y"),
                 "hidden_channels": meta.get("hidden_channels"),
@@ -539,19 +652,28 @@ def plot_overview_architecture_table(*, datasets: dict[str, pd.DataFrame]) -> wi
                 "mode_ratio": meta.get("mode_ratio"),
                 "lambda_phys": meta.get("lambda_phys"),
                 "lambda_p": meta.get("lambda_p"),
-                "rel_l2": float(np.median(df["rel_l2"])),
-                "l2": float(np.median(df["l2"])),
-                "physics": _median_physics_residual(df),
+                "rel_l2": float(np.nanmedian(pd.to_numeric(df["rel_l2"], errors="coerce"))),
+                "l2": float(np.nanmedian(pd.to_numeric(df["l2"], errors="coerce"))),
+                "rel_h1": float(np.nanmedian(pd.to_numeric(df["rel_h1"], errors="coerce"))) if "rel_h1" in df.columns else np.nan,
+                "h1": float(np.nanmedian(pd.to_numeric(df["h1"], errors="coerce"))) if "h1" in df.columns else np.nan,
+                "mom_mse": float(np.nanmedian(pd.to_numeric(df["mom_mse"], errors="coerce"))) if "mom_mse" in df.columns else np.nan,
+                "cont_mse": float(np.nanmedian(pd.to_numeric(df["cont_mse"], errors="coerce"))) if "cont_mse" in df.columns else np.nan,
+                "bc_mse": float(np.nanmedian(pd.to_numeric(df["bc_mse"], errors="coerce"))) if "bc_mse" in df.columns else np.nan,
+                "physics": _median_physics_residual(df),  # mom+cont (default)
             }
         )
 
     df_all = pd.DataFrame(rows)
 
+    arch_order = df_all["architecture"].tolist()
+    arch_order = list(dict.fromkeys(arch_order))  # unique, stabil
+    df_all["architecture"] = pd.Categorical(df_all["architecture"], categories=arch_order, ordered=True)
+
     out = widgets.Output()
     with out:
         display(Markdown("## Architecture overview"))
 
-        for arch, df_arch in df_all.groupby("architecture", sort=True):
+        for arch, df_arch in df_all.groupby("architecture", sort=False):
             display(
                 _build_single_architecture_table(
                     df_arch=df_arch,
