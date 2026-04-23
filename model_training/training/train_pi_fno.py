@@ -16,9 +16,9 @@ from torch.optim.optimizer import Optimizer
 
 from training.tools.pino_brinkman_losses import (
     PINOPhysicalLossDiv,
-    PINOPhysicalLossPhi,
+    PINOPhysicalLossEps,
     PINOSpectralLossDiv,
-    PINOSpectralLossPhi,
+    PINOSpectralLossEps,
 )
 from training.tools.spectral_hook import SpectralEnergyHook
 from training.train_base import train_base
@@ -33,11 +33,11 @@ CONFIG = {
     "device": "cuda" if torch.cuda.is_available() else "cpu",
     # --- Physics-informed training ---
     # Optionen:
-    #   "ps_phi"  -> Physical derivatives + div(phi u)
+    #   "ps_eps"  -> Physical derivatives + div(eps u)
     #   "ps_u"    -> Physical derivatives + div(u)
-    #   "sp_phi"  -> Spectral derivatives + div(phi u)
+    #   "sp_eps"  -> Spectral derivatives + div(eps u)
     #   "sp_u"    -> Spectral derivatives + div(u)
-    "pino_loss_type": "sp_phi",
+    "pino_loss_type": "sp_eps",
     "grad_mode": "fft_reflect",  # only for spectral losses
     "interior_pad": 2,  # useful for sp_*, can be 0 for ps_*
     "lambda_phys": 1e-4,
@@ -74,7 +74,7 @@ def finalize_config(CONFIG: dict) -> None:
     # -------------------------------
     # Defaults for PINO-loss selection
     # -------------------------------
-    CONFIG.setdefault("pino_loss_type", "sp_phi")  # ps_phi | ps_u | sp_phi | sp_u
+    CONFIG.setdefault("pino_loss_type", "sp_eps")  # ps_eps | ps_u | sp_eps | sp_u
     CONFIG.setdefault("grad_mode", "fft_reflect")  # only for spectral losses
     CONFIG.setdefault("interior_pad", 2)  # useful for sp_*, can be 0 for ps_*
 
@@ -119,11 +119,11 @@ def build_model_name(CONFIG: dict) -> str:
     """Build a descriptive PI-FNO model name based on the configuration."""
     m_x, m_y = CONFIG.get("n_modes_xy", (CONFIG["modes_x"], CONFIG["modes_y"]))
 
-    loss_type = str(CONFIG.get("pino_loss_type", "sp_phi"))
+    loss_type = str(CONFIG.get("pino_loss_type", "sp_eps"))
     tag_map = {
-        "ps_phi": "PI-FNO-PS-PHI",
+        "ps_eps": "PI-FNO-PS-EPS",
         "ps_u": "PI-FNO-PS-DIV",
-        "sp_phi": "PI-FNO-SP-PHI",
+        "sp_eps": "PI-FNO-SP-EPS",
         "sp_u": "PI-FNO-SP-DIV",
     }
     if loss_type not in tag_map:
@@ -172,18 +172,18 @@ def build_scheduler(optimizer: Optimizer) -> ReduceLROnPlateau:
 
 
 # --- Losses ---
-def build_train_loss(CONFIG: dict) -> PINOPhysicalLossDiv | PINOPhysicalLossPhi | PINOSpectralLossDiv | PINOSpectralLossPhi:
+def build_train_loss(CONFIG: dict) -> PINOPhysicalLossDiv | PINOPhysicalLossEps | PINOSpectralLossDiv | PINOSpectralLossEps:
     """Build the physics-informed loss function for training."""
-    loss_type = str(CONFIG.get("pino_loss_type", "sp_phi"))
+    loss_type = str(CONFIG.get("pino_loss_type", "sp_eps"))
 
     # optional: fuer spectral backend
     grad_mode = CONFIG.get("grad_mode", "fft_reflect")
     interior_pad = int(CONFIG.get("interior_pad", 2 if loss_type.startswith("sp") else 0))
 
     cls_map = {
-        "ps_phi": PINOPhysicalLossPhi,
+        "ps_eps": PINOPhysicalLossEps,
         "ps_u": PINOPhysicalLossDiv,
-        "sp_phi": PINOSpectralLossPhi,
+        "sp_eps": PINOSpectralLossEps,
         "sp_u": PINOSpectralLossDiv,
     }
     if loss_type not in cls_map:

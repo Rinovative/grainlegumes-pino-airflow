@@ -4,7 +4,7 @@
 % CSV columns (row-wise, flattened):
 %   x ; y ;
 %   Kxx ; Kyy ; Kxy ;
-%   phi ;
+%   eps ;
 %   [p_bc]
 %
 % JSON metadata:
@@ -46,7 +46,7 @@ nx = size(X,2);
 Kxx = fields.material.K.Kxx;
 Kyy = fields.material.K.Kyy;
 Kxy = fields.material.K.Kxy;
-phi = fields.material.phi;
+eps = fields.material.eps;
 
 %% === Boundary-condition field ===============================
 p_bc = zeros(ny, nx);
@@ -59,11 +59,11 @@ M = [
     Kxx(:), ...
     Kyy(:), ...
     Kxy(:), ...
-    phi(:), ...
+    eps(:), ...
     p_bc(:)
 ];
 
-col_names = {'x','y','Kxx','Kyy','Kxy','phi','p_bc'};
+col_names = {'x','y','Kxx','Kyy','Kxy','eps','p_bc'};
 
 %% === File naming ============================================
 if strlength(opts.file_tag) > 0

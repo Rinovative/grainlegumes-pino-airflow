@@ -23,7 +23,7 @@ Each case file contains:
       x, y,
       kxx, kyy (, kzz),
       kxy (, kxz, kyz),
-      phi, p_bc
+      eps, p_bc
   - output_fields:
       p, u, v, U
   - meta:
@@ -326,7 +326,7 @@ def build_batch_dataset(batch_name: str, verbose: bool = False) -> dict:  # noqa
                 input_fields[internal_name] = raw / denom
 
         # --------------------------------------------------------------
-        # Scalar input fields (phi, p_bc)
+        # Scalar input fields (eps, p_bc)
         # --------------------------------------------------------------
         for internal, col in SCALAR_INPUT_FIELDS.items():
             if col not in df.columns:

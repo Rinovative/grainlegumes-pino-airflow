@@ -9,7 +9,6 @@ This module provides high-level summary plots intended for:
 
 from __future__ import annotations
 
-import ast
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -40,63 +39,11 @@ EPS = 1e-12
 
 
 # =============================================================================
-# NPZ loading (local copy)
-# =============================================================================
-def _parse_npz_meta(meta_obj: Any) -> dict[str, Any]:
-    """
-    Parse 'meta' object from NPZ file into a dictionary.
-
-    Parameters
-    ----------
-    meta_obj : Any
-        The 'meta' object loaded from NPZ.
-
-    Returns
-    -------
-    dict[str, Any]
-        Parsed metadata dictionary.
-
-    """
-    if meta_obj is None:
-        return {}
-
-    # numpy scalar -> python obj
-    if isinstance(meta_obj, np.ndarray) and meta_obj.shape == ():
-        meta_obj = meta_obj.item()
-
-    if isinstance(meta_obj, dict):
-        return meta_obj
-
-    if isinstance(meta_obj, (str, bytes)):
-        s = meta_obj.decode("utf-8") if isinstance(meta_obj, bytes) else meta_obj
-        s = s.strip()
-        if not s:
-            return {}
-
-        # zuerst JSON versuchen
-        try:
-            out = json.loads(s)
-            return out if isinstance(out, dict) else {}
-        except Exception:  # noqa: BLE001, S110
-            pass
-
-        # fallback: Python literal eval (dein Beispiel sieht genau so aus)
-        try:
-            out = ast.literal_eval(s)
-            return out if isinstance(out, dict) else {}
-        except Exception:  # noqa: BLE001
-            return {}
-
-    return {}
-
-
-# =============================================================================
 # Scalar physics metric
 # =============================================================================
 def _combined_physics_mse(
     df: pd.DataFrame,
     *,
-    use_full: bool = False,
     include_bc: bool = False,
 ) -> np.ndarray:
     """
@@ -106,8 +53,6 @@ def _combined_physics_mse(
     ----------
     df : pandas.DataFrame
         Evaluation DataFrame containing physics metrics.
-    use_full : bool, optional
-        Whether to use full-domain metrics, by default False.
     include_bc : bool, optional
         Whether to include boundary condition metrics, by default False.
 
@@ -117,20 +62,11 @@ def _combined_physics_mse(
         Combined physics MSE score array.
 
     """
-    mom_col = "mom_mse_full" if use_full and "mom_mse_full" in df.columns else "mom_mse"
-    cont_col = "cont_mse_divu" if "cont_mse_divu" in df.columns else "cont_mse_full" if use_full and "cont_mse_full" in df.columns else "cont_mse"
-    bc_col = "bc_mse"
+    bc = pd.to_numeric(df["bc_mse"], errors="coerce").to_numpy(dtype=float) if "bc_mse" in df.columns else None
 
-    if mom_col not in df.columns or cont_col not in df.columns:
-        return np.full(len(df), np.nan, dtype=float)
+    score = pd.to_numeric(df["phys_mse"], errors="coerce").to_numpy(dtype=float)
 
-    mom = pd.to_numeric(df[mom_col], errors="coerce").to_numpy(dtype=float)
-    cont = pd.to_numeric(df[cont_col], errors="coerce").to_numpy(dtype=float)
-
-    score = mom + cont
-
-    if include_bc and bc_col in df.columns:
-        bc = pd.to_numeric(df[bc_col], errors="coerce").to_numpy(dtype=float)
+    if include_bc and bc is not None:
         score = score + bc
 
     return score
@@ -138,22 +74,16 @@ def _combined_physics_mse(
 
 def _median_physics_residual(
     df: pd.DataFrame,
-    max_cases: int = 500,
     *,
-    use_full: bool = False,
     include_bc: bool = False,
 ) -> float:
     """
-    Median combined physics residual score over cases.
+    Median combined physics residual score over all cases.
 
     Parameters
     ----------
     df : pandas.DataFrame
         Evaluation DataFrame containing physics metrics.
-    max_cases : int, optional
-        Maximum number of cases to consider, by default 500.
-    use_full : bool, optional
-        Whether to use full-domain metrics, by default False.
     include_bc : bool, optional
         Whether to include boundary condition metrics, by default False.
 
@@ -163,9 +93,7 @@ def _median_physics_residual(
         Median combined physics residual score.
 
     """
-    df_i = df.reset_index(drop=True).iloc[:max_cases]
-
-    score = _combined_physics_mse(df_i, use_full=use_full, include_bc=include_bc)
+    score = _combined_physics_mse(df, include_bc=include_bc)
     score = score[np.isfinite(score)]
 
     return float(np.median(score)) if score.size else float("nan")
@@ -254,14 +182,6 @@ def _load_model_metadata(df: pd.DataFrame) -> dict[str, Any]:
     # --------------------------------------------------
     meta["lambda_phys"] = physics.get("lambda_phys")
     meta["lambda_p"] = physics.get("lambda_p")
-
-    if "physics_variant" in df.columns and not df["physics_variant"].isna().all():
-        try:
-            meta["physics_variant"] = str(df["physics_variant"].iloc[0])
-        except Exception:  # noqa: BLE001
-            meta["physics_variant"] = None
-    else:
-        meta["physics_variant"] = None
 
     return meta
 
@@ -362,8 +282,19 @@ def _style_numeric_block_blue(block: pd.DataFrame, columns: list[str]) -> pd.Dat
 def build_global_summary_table(
     datasets_eval: dict[str, pd.DataFrame],
     *,
-    metrics: tuple[str, ...] = ("rel_l2", "l2", "rel_h1", "h1", "mom_mse", "cont_mse", "bc_mse"),
-    stats: tuple[str, ...] = ("median", "mean", "q90", "q95"),
+    metrics: tuple[str, ...] = (
+        "rmse_p",
+        "rmse_U",
+        "l2",
+        "rel_l2",
+        "h1",
+        "rel_h1",
+        "phys_mse",
+        "mom_mse",
+        "cont_mse",
+        "bc_mse",
+    ),
+    stats: tuple[str, ...] = ("median", "mean", "q90"),
 ) -> pd.DataFrame:
     """
     Build global summary table for multiple evaluation DataFrames.
@@ -389,7 +320,6 @@ def build_global_summary_table(
         "median": lambda a: float(np.nanmedian(a)),
         "mean": lambda a: float(np.nanmean(a)),
         "q90": lambda a: float(np.nanquantile(a, 0.90)),
-        "q95": lambda a: float(np.nanquantile(a, 0.95)),
     }
 
     rows: list[dict[str, float | str]] = []
@@ -417,8 +347,19 @@ def plot_overview_global_summary_table(
     *,
     datasets: dict[str, pd.DataFrame],
     title: str = "Global summary",
-    metrics: tuple[str, ...] = ("rel_l2", "l2", "rel_h1", "h1", "mom_mse", "cont_mse", "bc_mse"),
-    stats: tuple[str, ...] = ("median", "mean", "q90", "q95"),
+    metrics: tuple[str, ...] = (
+        "rmse_p",
+        "rmse_U",
+        "l2",
+        "rel_l2",
+        "h1",
+        "rel_h1",
+        "phys_mse",
+        "mom_mse",
+        "cont_mse",
+        "bc_mse",
+    ),
+    stats: tuple[str, ...] = ("median", "mean", "q90"),
 ) -> widgets.VBox:
     """
     Plot global summary table as a widget.
@@ -432,7 +373,7 @@ def plot_overview_global_summary_table(
     metrics : tuple[str, ...], optional
         Metrics to include, by default ("rel_l2", "l2", "rel_h1", "h1", "mom_mse", "cont_mse", "bc_mse").
     stats : tuple[str, ...], optional
-        Statistics to include, by default ("median", "mean", "q90", "q95").
+        Statistics to include, by default ("median", "mean", "q90").
     sort_by : str, optional
         Column to sort by, by default "rel_l2_median".
     number_fmt : str, optional
@@ -480,18 +421,18 @@ def plot_overview_scoreboard(*, datasets: dict[str, pd.DataFrame]) -> Figure:
     """
     names = list(datasets.keys())
 
-    rel_l2 = []
-    l2 = []
+    rmse_p = []
+    rmse_U = []
     phys = []
 
     for df in datasets.values():
-        rel_l2.append(float(np.median(df["rel_l2"])))
-        l2.append(float(np.median(df["l2"])))
+        rmse_p.append(float(np.nanmedian(pd.to_numeric(df["rmse_p"], errors="coerce"))))
+        rmse_U.append(float(np.nanmedian(pd.to_numeric(df["rmse_U"], errors="coerce"))))
         phys.append(_median_physics_residual(df))
 
     metrics = {
-        "rel_l2": np.asarray(rel_l2),
-        "l2": np.asarray(l2),
+        "rmse_p": np.asarray(rmse_p),
+        "rmse_U": np.asarray(rmse_U),
         "physics": np.asarray(phys),
     }
 
@@ -506,9 +447,9 @@ def plot_overview_scoreboard(*, datasets: dict[str, pd.DataFrame]) -> Figure:
     x = np.arange(len(names))
     w = 0.25
 
-    ax.bar(x - w, norm["rel_l2"], w, label="rel L2")
-    ax.bar(x, norm["l2"], w, label="L2")
-    ax.bar(x + w, norm["physics"], w, label="Physics residual")
+    ax.bar(x - w, norm["rmse_p"], w, label="RMSE(p)")
+    ax.bar(x, norm["rmse_U"], w, label="RMSE(U)")
+    ax.bar(x + w, norm["physics"], w, label="Physics residual (MSE)")
 
     ax.set_xticks(x)
     ax.set_xticklabels(
@@ -551,11 +492,7 @@ def plot_overview_pareto_error_vs_physics(*, datasets: dict[str, pd.DataFrame]) 
     for name, df in datasets.items():
         x = float(np.nanmedian(pd.to_numeric(df["rel_l2"], errors="coerce")))
 
-        if "mom_mse" not in df.columns:
-            msg = f"Missing column 'mom_mse' for model '{name}'"
-            raise KeyError(msg)
-
-        y = float(np.nanmedian(pd.to_numeric(df["mom_mse"], errors="coerce")))
+        y = _median_physics_residual(df)
 
         ax.scatter(x, y, s=80)
         ax.annotate(
@@ -570,8 +507,8 @@ def plot_overview_pareto_error_vs_physics(*, datasets: dict[str, pd.DataFrame]) 
 
     ax.set_yscale("log")
     ax.set_xlabel(r"Median relative $L^2$ error")
-    ax.set_ylabel("Median momentum residual (MSE)")
-    ax.set_title("Pareto: accuracy vs physics consistency")
+    ax.set_ylabel("Median combined physics residual (MSE)")
+    ax.set_title("Pareto: accuracy vs combined physics consistency")
     ax.grid(True, which="both", linestyle="--", alpha=0.3)
 
     fig.subplots_adjust(
@@ -644,7 +581,6 @@ def plot_overview_architecture_table(*, datasets: dict[str, pd.DataFrame]) -> wi
                 "__order": len(rows),
                 "model": name,
                 "architecture": meta.get("architecture"),
-                "physics_variant": meta.get("physics_variant"),
                 "modes_x": meta.get("modes_x"),
                 "modes_y": meta.get("modes_y"),
                 "hidden_channels": meta.get("hidden_channels"),
@@ -652,14 +588,16 @@ def plot_overview_architecture_table(*, datasets: dict[str, pd.DataFrame]) -> wi
                 "mode_ratio": meta.get("mode_ratio"),
                 "lambda_phys": meta.get("lambda_phys"),
                 "lambda_p": meta.get("lambda_p"),
-                "rel_l2": float(np.nanmedian(pd.to_numeric(df["rel_l2"], errors="coerce"))),
+                "rmse_p": float(np.nanmedian(pd.to_numeric(df["rmse_p"], errors="coerce"))) if "rmse_p" in df.columns else np.nan,
+                "rmse_U": float(np.nanmedian(pd.to_numeric(df["rmse_U"], errors="coerce"))) if "rmse_U" in df.columns else np.nan,
                 "l2": float(np.nanmedian(pd.to_numeric(df["l2"], errors="coerce"))),
-                "rel_h1": float(np.nanmedian(pd.to_numeric(df["rel_h1"], errors="coerce"))) if "rel_h1" in df.columns else np.nan,
+                "rel_l2": float(np.nanmedian(pd.to_numeric(df["rel_l2"], errors="coerce"))),
                 "h1": float(np.nanmedian(pd.to_numeric(df["h1"], errors="coerce"))) if "h1" in df.columns else np.nan,
+                "rel_h1": float(np.nanmedian(pd.to_numeric(df["rel_h1"], errors="coerce"))) if "rel_h1" in df.columns else np.nan,
+                "phys_mse": float(np.nanmedian(pd.to_numeric(df["phys_mse"], errors="coerce"))) if "phys_mse" in df.columns else np.nan,
                 "mom_mse": float(np.nanmedian(pd.to_numeric(df["mom_mse"], errors="coerce"))) if "mom_mse" in df.columns else np.nan,
-                "cont_mse": float(np.nanmedian(pd.to_numeric(df["cont_mse"], errors="coerce"))) if "cont_mse" in df.columns else np.nan,
+                "cont_mse": float(np.nanmedian(pd.to_numeric(df["cont_mse"], errors="coerce"))),
                 "bc_mse": float(np.nanmedian(pd.to_numeric(df["bc_mse"], errors="coerce"))) if "bc_mse" in df.columns else np.nan,
-                "physics": _median_physics_residual(df),  # mom+cont (default)
             }
         )
 

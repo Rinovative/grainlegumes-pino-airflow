@@ -7,21 +7,56 @@ reusable artifacts for all downstream evaluation and visualisation modules.
 Artifacts
 ---------
 Parquet (global, per case):
-    - case_index   : integer case id
-    - npz_path     : path to the corresponding NPZ artifact
-    - l2           : global L2 error over the full domain
-    - rel_l2       : global relative L2 error
-    - kappa_names  : list of available permeability tensor components
-    - meta         : JSON-safe metadata dictionary
+    - case_index        : integer case id
+    - npz_path          : path to the corresponding NPZ artifact
+
+    # Absolute field errors (physical units, full domain unless noted)
+    - l2                : absolute RMSE on [p, u, v] over the full domain
+    - h1                : absolute H1-like error on [p, u, v] over the interior (cropped by EVAL_PAD)
+
+    # Relative field errors (dimensionless, channel-balanced)
+    - rel_l2            : channel-balanced mean relative L2 on [p, u, v] over the full domain
+    - rel_h1            : channel-balanced mean relative H1 on [p, u, v] over the interior (cropped by EVAL_PAD)
+
+    # Book-friendly metrics (physical units, intuitive)
+    - rmse_p            : RMSE of pressure p over the full domain
+    - rmse_U            : RMSE of speed magnitude U=sqrt(u^2+v^2) over the full domain
+
+    # Physics residual metrics (interior-cropped by EVAL_PAD)
+    - mom_mse           : MSE of Brinkman momentum residual
+    - cont_mse          : MSE of continuity residual div(u) computed with SP (reflect-FFT)
+    - phys_mse          : mom_mse + cont_mse (convenience scalar)
+
+    # Boundary condition metric (no crop, evaluated on inlet/outlet masks)
+    - bc_mse            : pressure BC mismatch on inlet/outlet boundaries
+
+    # Diagnostics
+    - cont_mse_divepsu  : MSE of div(eps u) on interior (cropped by EVAL_PAD), diagnostic even if cont_mse is div(u)
+    - kappa_names       : list of available permeability tensor components
+    - meta              : JSON-safe metadata dictionary (stored as JSON string)
 
 NPZ (local, full fields per case):
-    - pred         : (C_out, H, W) model prediction
-    - gt           : (C_out, H, W) ground truth
-    - err          : (C_out, H, W) prediction error (pred - gt)
+    - pred         : (4, H, W) prediction [p, u, v, U]
+    - gt           : (4, H, W) ground truth [p, u, v, U]
+    - err          : (4, H, W) prediction error (pred - gt) for [p, u, v, U]
+
     - kappa_log    : (C_kappa, H, W) log10-permeability components
     - kappa        : (C_kappa, H, W) physical permeability components
     - kappa_names  : list[str], same order as kappa channels
     - p_bc         : (1, H, W) pressure boundary condition
+
+    # Raw inputs/targets for compatibility with downstream tools
+    - x_raw        : (C_in, H, W) raw input tensor (physical units)
+    - y_raw        : (C_out, H, W) raw target tensor (physical units)
+    - input_fields : list[str] canonical input channel names
+
+    # Physics diagnostic fields (full fields, not cropped)
+    - Rx           : (H, W) x-momentum residual field
+    - Ry           : (H, W) y-momentum residual field
+    - Rc           : (H, W) continuity residual field (here: div(u))
+    - div_u        : (H, W) divergence field div(u)
+    - div_eps_u    : (H, W) divergence field div(eps u)
+
     - meta         : JSON string with full metadata
 """
 
@@ -34,13 +69,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pandas as pd
 import torch
-from torch import nn
-from training.tools.pino_brinkman_losses import (
-    PINOPhysicalLossDiv,
-    PINOPhysicalLossPhi,
-    PINOSpectralLossDiv,
-    PINOSpectralLossPhi,
-)
+from training.tools.pino_brinkman_losses import PINOSpectralLossDiv
 
 from src.schema.schema_kappa import INTERNAL_KAPPA_2D_ORDER, INTERNAL_KAPPA_3D_ORDER
 from src.schema.schema_training import DEFAULT_INPUTS_2D
@@ -56,10 +85,14 @@ if TYPE_CHECKING:
 INTERNAL_KAPPA_NAMES = set(INTERNAL_KAPPA_2D_ORDER) | set(INTERNAL_KAPPA_3D_ORDER)
 MU_AIR = 1.8139e-5  # must be consistent with training
 
+# ----------------------------------------------------------------------------
+# Canonical evaluation settings (for model-to-model comparability)
+# ----------------------------------------------------------------------------
+EVAL_PAD = 2  # crop for ALL gradient-based metrics (H1 + physics)
+
 # =============================================================================
 # JSON / type normalisation utilities
 # =============================================================================
-
 
 NUMPY_INT_TYPES = (
     np.int_,
@@ -173,22 +206,16 @@ def extract_kappa(
     index_map = {name: i for i, name in enumerate(input_fields)}
     kappa_indices = [index_map[name] for name in kappa_names]
 
-    # --------------------------------------------------
     # log-kappa (as stored in dataset)
-    # --------------------------------------------------
     kappa_log = x_tensor[:, kappa_indices, :, :]
 
-    # --------------------------------------------------
     # physical kappa reconstruction
-    # --------------------------------------------------
     kappa_phys = torch.zeros_like(kappa_log)
-
     name_to_pos = {name: i for i, name in enumerate(kappa_names)}
 
     # kxx, kyy (always log10-physical)
     kxx = torch.pow(10.0, kappa_log[:, name_to_pos["kxx"]])
     kyy = torch.pow(10.0, kappa_log[:, name_to_pos["kyy"]])
-
     kappa_phys[:, name_to_pos["kxx"]] = kxx
     kappa_phys[:, name_to_pos["kyy"]] = kyy
 
@@ -201,41 +228,6 @@ def extract_kappa(
         "kappa_log": kappa_log,
         "kappa": kappa_phys,
     }
-
-
-# ============================================================================
-# Physics term computations
-# ============================================================================
-
-
-def _infer_variant_from_run_dir(run_dir_name: str) -> tuple[str, str]:
-    """
-    Return (deriv_backend, continuity).
-
-        PS -> physical derivatives
-        SP -> spectral derivatives (reflect-FFT)
-        divu -> div(u)
-        divepsu / divεsu -> div(phi u)
-    """
-    name = run_dir_name.lower()
-
-    if "-ps" in name or "_ps" in name:
-        deriv_backend = "physical"
-    elif "-sp" in name or "_sp" in name:
-        deriv_backend = "spectral"
-    else:
-        deriv_backend = "physical"
-
-    # --- continuity: divu vs divepsu (hart) ---
-    if "divu" in name:
-        continuity = "div"
-    elif "divepsu" in name or "divεsu" in name:
-        continuity = "phi"
-    else:
-        # fallback
-        continuity = "phi"
-
-    return deriv_backend, continuity
 
 
 # =============================================================================
@@ -258,7 +250,7 @@ def generate_artifacts(  # noqa: PLR0915
 
     For each case:
         - perform a forward pass with the trained model
-        - compute global error metrics
+        - compute global error metrics (l2/rel_l2 full-domain; h1 + physics terms on interior cropped by EVAL_PAD)
         - store full spatial fields in an NPZ file
         - store scalar metrics and metadata in a Parquet table
 
@@ -299,11 +291,7 @@ def generate_artifacts(  # noqa: PLR0915
         run_dir = run_dir.parent
 
     run_name = run_dir.name
-    deriv_backend, continuity = _infer_variant_from_run_dir(run_name)
-
-    ps_sp = "PS" if deriv_backend == "physical" else "SP"
-    cont_tag = "divu" if continuity == "div" else "divepsu"
-    physics_variant = f"{cont_tag}-{ps_sp}"
+    physics_variant = "divu-SP"
 
     print(
         "[ARTIFACTS]",
@@ -320,26 +308,19 @@ def generate_artifacts(  # noqa: PLR0915
     def _zero_data_loss(pred: torch.Tensor, y: torch.Tensor) -> torch.Tensor:  # noqa: ARG001
         return pred.new_zeros(())
 
-    loss_cls: type[nn.Module]
-
-    if deriv_backend == "physical" and continuity == "div":
-        loss_cls = PINOPhysicalLossDiv
-    elif deriv_backend == "physical" and continuity == "phi":
-        loss_cls = PINOPhysicalLossPhi
-    elif deriv_backend == "spectral" and continuity == "div":
-        loss_cls = PINOSpectralLossDiv
-    else:  # spectral + phi
-        loss_cls = PINOSpectralLossPhi
-    print(f"[ARTIFACTS] Using loss_cls={loss_cls.__name__}")
-
-    loss_obj = loss_cls(
+    # Canonical eval physics: spectral derivatives (reflect-FFT) + div(u), fixed interior crop
+    loss_obj = PINOSpectralLossDiv(
         data_loss=_zero_data_loss,
         lambda_phys=1.0,
         lambda_p=0.0,
         in_normalizer=processor.in_normalizer,
         out_normalizer=processor.out_normalizer,
+        grad_mode="fft_reflect",
+        interior_pad=EVAL_PAD,
+        log_every=10_000_000,
     ).to(device)
     loss_obj.eval()
+    print(f"[ARTIFACTS] Using EVAL loss_cls={loss_obj.__class__.__name__} (pad={EVAL_PAD})")
 
     npz_dir = save_root / "npz"
     npz_dir.mkdir(parents=True, exist_ok=True)
@@ -377,10 +358,9 @@ def generate_artifacts(  # noqa: PLR0915
             kappa_names=kappa_names,
         )
 
-        # Forward pass
-        # --------------------------
-        # Inference timing per sample
-        # --------------------------
+        # --------------------------------------------------
+        # Forward pass (model operates in normalized space)
+        # --------------------------------------------------
         if device.type == "cuda":
             torch.cuda.synchronize()
         start_time = torch.cuda.Event(enable_timing=True) if device.type == "cuda" else None
@@ -395,27 +375,27 @@ def generate_artifacts(  # noqa: PLR0915
             y_hat = y_hat_norm * (out_std + 1e-12) + out_mean
 
         # --------------------------------------------------
-        # Exact training-consistent physics diagnostics
-        # (works in normalized space)
+        # Physics diagnostics (exact training-consistent implementation)
         # --------------------------------------------------
         with torch.no_grad():
             diag = loss_obj.compute_diagnostics(y_hat_norm, x=x_norm)
 
         mom_mse = float(diag["mom_mse"].detach().cpu().item())
-        cont_mse = float(diag["cont_mse"].detach().cpu().item())
         bc_mse = float(diag["bc_mse"].detach().cpu().item())
 
-        # Optional extra diagnostics (often useful)
-        mom_mse_full = float(diag["mom_mse_full"].detach().cpu().item())
-        cont_mse_full = float(diag["cont_mse_full"].detach().cpu().item())
+        # Rc from this eval loss is div(u)
+        cont_mse_divu = float(diag["cont_mse"].detach().cpu().item())
+        phys_mse = float(mom_mse + cont_mse_divu)
 
         Rx_np = diag["Rx"].detach().cpu().squeeze(0).squeeze(0).numpy()
         Ry_np = diag["Ry"].detach().cpu().squeeze(0).squeeze(0).numpy()
         Rc_np = diag["Rc"].detach().cpu().squeeze(0).squeeze(0).numpy()
         divu_np = diag["div_u"].detach().cpu().squeeze(0).squeeze(0).numpy()
-        divphiu_np = diag["div_phi_u"].detach().cpu().squeeze(0).squeeze(0).numpy()
-        cont_mse_divu = float(np.mean(divu_np**2))
-        cont_mse_divepsu = float(np.mean(divphiu_np**2))
+        divepsu_np = diag["div_eps_u"].detach().cpu().squeeze(0).squeeze(0).numpy()
+
+        # diagnostic: div(eps u) MSE with same crop
+        div_eps_u_i = divepsu_np[EVAL_PAD:-EVAL_PAD, EVAL_PAD:-EVAL_PAD] if EVAL_PAD > 0 else divepsu_np
+        cont_mse_divepsu = float(np.mean(div_eps_u_i**2))
 
         if device.type == "cuda" and end_time is not None:
             end_time.record(torch.cuda.current_stream())
@@ -424,34 +404,95 @@ def generate_artifacts(  # noqa: PLR0915
         else:
             inference_time_ms = None
 
-        # Outputs
+        # --------------------------------------------------
+        # Outputs (de-normalised, physical units)
+        # --------------------------------------------------
         p, u, v = y_hat[:, 0:1], y_hat[:, 1:2], y_hat[:, 2:3]
-        U = torch.sqrt(u**2 + v**2)
-
         p_gt, u_gt, v_gt = y[:, 0:1], y[:, 1:2], y[:, 2:3]
+
+        U = torch.sqrt(u**2 + v**2)
         U_gt = torch.sqrt(u_gt**2 + v_gt**2)
 
+        # Book-friendly metrics (physical units)
+        rmse_p = torch.sqrt(torch.mean((p - p_gt) ** 2)).item()
+        rmse_U = torch.sqrt(torch.mean((U - U_gt) ** 2)).item()
+
+        # Full tensors for NPZ export / plotting (includes U)
         y_hat_ext = torch.cat([p, u, v, U], dim=1)
         y_ext = torch.cat([p_gt, u_gt, v_gt, U_gt], dim=1)
+        err_ext = y_hat_ext - y_ext
 
-        err = y_hat_ext - y_ext
-        l2 = torch.linalg.norm(err).item()
-        rel_l2 = l2 / (torch.linalg.norm(y_ext).item() + 1e-12)
+        # Main metric tensors (ONLY p,u,v)
+        y_hat_main = torch.cat([p, u, v], dim=1)
+        y_main = torch.cat([p_gt, u_gt, v_gt], dim=1)
+        err_main = y_hat_main - y_main
 
+        # Grid spacing from coordinate fields (physical)
         idx_x = DEFAULT_INPUTS_2D.index("x")
         idx_y = DEFAULT_INPUTS_2D.index("y")
         dx = float((x[0, idx_x, 0, 1] - x[0, idx_x, 0, 0]).abs().detach().cpu().item())
         dy = float((x[0, idx_y, 1, 0] - x[0, idx_y, 0, 0]).abs().detach().cpu().item())
 
-        derr_dy, derr_dx = torch.gradient(err, spacing=(dy, dx), dim=(2, 3))
-        h1_sq = (err.pow(2) + derr_dx.pow(2) + derr_dy.pow(2)).mean()
-        h1 = h1_sq.sqrt().item()
+        metric_eps = 1e-12
 
-        dy_ref, dx_ref = torch.gradient(y_ext, spacing=(dy, dx), dim=(2, 3))
-        h1_ref_sq = (y_ext.pow(2) + dx_ref.pow(2) + dy_ref.pow(2)).mean()
-        rel_h1 = h1 / (h1_ref_sq.sqrt().item() + 1e-12)
+        # ------------------------------------------------------------------
+        # Absolute + relative L2/H1 on [p, u, v]
+        # ------------------------------------------------------------------
+        rel_l2_per_channel: list[float] = []
+        rel_h1_per_channel: list[float] = []
 
+        # Absolute "L2" here is RMSE over all entries of [p,u,v]
+        l2 = torch.sqrt(torch.mean(err_main.pow(2))).item()
+
+        # Absolute H1-like: RMSE of (field error + gradient error) on interior
+        derr_dy_all, derr_dx_all = torch.gradient(err_main, spacing=(dy, dx), dim=(2, 3))
+        if EVAL_PAD > 0:
+            err_i = err_main[..., EVAL_PAD:-EVAL_PAD, EVAL_PAD:-EVAL_PAD]
+            derr_dx_i = derr_dx_all[..., EVAL_PAD:-EVAL_PAD, EVAL_PAD:-EVAL_PAD]
+            derr_dy_i = derr_dy_all[..., EVAL_PAD:-EVAL_PAD, EVAL_PAD:-EVAL_PAD]
+        else:
+            err_i, derr_dx_i, derr_dy_i = err_main, derr_dx_all, derr_dy_all
+
+        h1 = torch.sqrt(torch.mean(err_i.pow(2) + derr_dx_i.pow(2) + derr_dy_i.pow(2))).item()
+
+        for c in range(y_main.shape[1]):  # c in {p,u,v}
+            e_c = err_main[:, c : c + 1]
+            r_c = y_main[:, c : c + 1]
+
+            # Relative L2 per channel (global norm ratio)
+            l2_e_c = torch.linalg.norm(e_c)
+            l2_r_c = torch.linalg.norm(r_c)
+            rel_l2_c = (l2_e_c / (l2_r_c + metric_eps)).item()
+            rel_l2_per_channel.append(float(rel_l2_c))
+
+            # Relative H1 per channel (interior, with gradients)
+            de_dy_c, de_dx_c = torch.gradient(e_c, spacing=(dy, dx), dim=(2, 3))
+            dr_dy_c, dr_dx_c = torch.gradient(r_c, spacing=(dy, dx), dim=(2, 3))
+
+            if EVAL_PAD > 0:
+                e_i = e_c[..., EVAL_PAD:-EVAL_PAD, EVAL_PAD:-EVAL_PAD]
+                de_dx_i = de_dx_c[..., EVAL_PAD:-EVAL_PAD, EVAL_PAD:-EVAL_PAD]
+                de_dy_i = de_dy_c[..., EVAL_PAD:-EVAL_PAD, EVAL_PAD:-EVAL_PAD]
+
+                r_i = r_c[..., EVAL_PAD:-EVAL_PAD, EVAL_PAD:-EVAL_PAD]
+                dr_dx_i = dr_dx_c[..., EVAL_PAD:-EVAL_PAD, EVAL_PAD:-EVAL_PAD]
+                dr_dy_i = dr_dy_c[..., EVAL_PAD:-EVAL_PAD, EVAL_PAD:-EVAL_PAD]
+            else:
+                e_i, de_dx_i, de_dy_i = e_c, de_dx_c, de_dy_c
+                r_i, dr_dx_i, dr_dy_i = r_c, dr_dx_c, dr_dy_c
+
+            h1_e_c = torch.sqrt((e_i.pow(2) + de_dx_i.pow(2) + de_dy_i.pow(2)).mean())
+            h1_r_c = torch.sqrt((r_i.pow(2) + dr_dx_i.pow(2) + dr_dy_i.pow(2)).mean())
+
+            rel_h1_c = (h1_e_c / (h1_r_c + metric_eps)).item()
+            rel_h1_per_channel.append(float(rel_h1_c))
+
+        rel_l2 = float(np.mean(rel_l2_per_channel))
+        rel_h1 = float(np.mean(rel_h1_per_channel))
+
+        # --------------------------------------------------
         # Write NPZ artifact
+        # --------------------------------------------------
         npz_path = npz_dir / f"case_{case_id:04d}.npz"
         x_raw = x.squeeze(0).detach().cpu().numpy()  # (C_in,H,W)
         y_raw = y.squeeze(0).detach().cpu().numpy()  # (C_out,H,W)
@@ -460,7 +501,7 @@ def generate_artifacts(  # noqa: PLR0915
             npz_path,
             pred=y_hat_ext.squeeze(0).cpu().numpy(),
             gt=y_ext.squeeze(0).cpu().numpy(),
-            err=err.squeeze(0).cpu().numpy(),
+            err=err_ext.squeeze(0).cpu().numpy(),
             kappa_log=kappa_info["kappa_log"].squeeze(0).cpu().numpy(),
             kappa=kappa_info["kappa"].squeeze(0).cpu().numpy(),
             kappa_names=np.array(kappa_names, dtype=object),
@@ -469,36 +510,37 @@ def generate_artifacts(  # noqa: PLR0915
             x_raw=x_raw,
             y_raw=y_raw,
             input_fields=np.array(DEFAULT_INPUTS_2D, dtype=object),
-            physics_variant=np.array(physics_variant, dtype=object),
             Rx=Rx_np,
             Ry=Ry_np,
             Rc=Rc_np,
             div_u=divu_np,
-            div_phi_u=divphiu_np,
+            div_eps_u=divepsu_np,
         )
 
+        # --------------------------------------------------
         # Parquet row (scalar metrics + metadata only)
+        # --------------------------------------------------
         rows.append(
             {
                 "inference_time_ms": inference_time_ms,
                 "case_index": case_id,
                 "npz_path": str(npz_path),
                 "l2": l2,
-                "rel_l2": rel_l2,
                 "h1": h1,
+                "rel_l2": rel_l2,
                 "rel_h1": rel_h1,
+                "rmse_p": rmse_p,
+                "rmse_U": rmse_U,
                 "kappa_names": kappa_names,
-                "physics_variant": physics_variant,
                 "mom_mse": mom_mse,
-                "cont_mse": cont_mse,
-                "cont_mse_divu": cont_mse_divu,
-                "cont_mse_divepsu": cont_mse_divepsu,
-                "mom_mse_full": mom_mse_full,
-                "cont_mse_full": cont_mse_full,
+                "cont_mse": cont_mse_divu,
+                "phys_mse": phys_mse,
                 "bc_mse": bc_mse,
+                "cont_mse_divepsu": cont_mse_divepsu,
                 "meta": json.dumps(meta_clean),
             }
         )
+
     df = pd.DataFrame(rows)
     parquet_path = save_root / f"{dataset_name}.parquet"
     parquet_path.parent.mkdir(parents=True, exist_ok=True)

@@ -84,7 +84,7 @@ class FlowModule:
                                     x, y,
                                     kxx, kyy (, kzz),
                                     kxy (, kxz, kyz),
-                                    phi, p_bc
+                                    eps, p_bc
                     - "outputs": Tensor [N, C_out, H, W]
                                  Channels:
                                      p, u, v, U

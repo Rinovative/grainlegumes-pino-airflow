@@ -8,7 +8,7 @@ Governing equations:
     - Momentum (Brinkman):
         -∇p + ∇·τ - μ K^{-1} u = 0
     - Mass conservation (conservative form):
-        ∇·(φ u) = 0
+        ∇·(ε u) = 0
 """
 
 from collections.abc import Callable
@@ -87,7 +87,7 @@ class PINOPhysicalLoss(nn.Module):
     where
         L_data         : Data loss (e.g., L2 or H1) between predicted and true outputs.
         L_phys         : Physics loss enforcing Brinkman momentum balance and
-                         conservative continuity ∇·(φ u) = 0.
+                         conservative continuity ∇·(ε u) = 0.
         L_pressure_bc  : Loss enforcing pressure boundary conditions at inlet/outlet.
 
     Parameters
@@ -216,7 +216,7 @@ class PINOPhysicalLoss(nn.Module):
         kyy_log = x_phys[:, self._in_idx["kyy"]]
         kxy_rel = x_phys[:, self._in_idx["kxy"]]
 
-        phi = x_phys[:, self._in_idx["phi"]].clamp_min(1e-6)
+        eps = x_phys[:, self._in_idx["eps"]].clamp_min(1e-6)
         p_bc = x_phys[:, self._in_idx["p_bc"]]
 
         kxx = torch.pow(10.0, kxx_log)
@@ -250,14 +250,14 @@ class PINOPhysicalLoss(nn.Module):
         dvdy = grad_y(v, dy)
 
         # continuity (conservative form)
-        phi_u = phi * u
-        phi_v = phi * v
-        div_phi_u = grad_x(phi_u, dx) + grad_y(phi_v, dy)
+        eps_u = eps * u
+        eps_v = eps * v
+        div_eps_u = grad_x(eps_u, dx) + grad_y(eps_v, dy)
 
         # ------------------------------------------------------------
         # 4) Brinkman operator
         # ------------------------------------------------------------
-        coef = MU_AIR / phi
+        coef = MU_AIR / eps
 
         div_u = dudx + dvdy  # divergence of superficial velocity (used in deviatoric stress)
         Kxx = coef * (2.0 * dudx) - (2.0 / 3.0) * coef * div_u
@@ -287,7 +287,7 @@ class PINOPhysicalLoss(nn.Module):
         Ry = -dpdy + divKy - drag_y
 
         # conservative mass residual
-        Rc = div_phi_u
+        Rc = div_eps_u
         phys_loss = Rx.pow(2).mean() + Ry.pow(2).mean() + Rc.pow(2).mean()
 
         # ------------------------------------------------------------
@@ -337,7 +337,7 @@ class PINOPhysicalLoss(nn.Module):
                     # --- Physics diagnostics ---
                     "physics/Rx_l2": Rx.pow(2).mean().sqrt().item(),
                     "physics/Ry_l2": Ry.pow(2).mean().sqrt().item(),
-                    "physics/div_phi_u_l2": Rc.pow(2).mean().sqrt().item(),
+                    "physics/div_eps_u_l2": Rc.pow(2).mean().sqrt().item(),
                     # # --- Kappa diagnostics ---
                     # "Kappa/kxx_log_min": kxx_log.min().item(),
                     # "Kappa/kxx_log_mean": kxx_log.mean().item(),

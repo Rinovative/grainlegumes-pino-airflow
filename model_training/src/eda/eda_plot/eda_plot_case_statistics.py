@@ -655,7 +655,7 @@ def plot_field_value_distributions(*, datasets: dict[str, pd.DataFrame]) -> widg
                     "kxx": r"log10($k_{xx}$)",
                     "kyy": r"log10($k_{yy}$)",
                     "kxy": r"$\hat{k}_{xy}$ [-]",
-                    "phi": r"$\varepsilon$ [-]",
+                    "eps": r"$\varepsilon$ [-]",
                     "p_bc": r"$p_{\mathrm{bc}}$ [Pa]",
                     "p": r"$p$ [Pa]",
                     "u": r"$u$ [m/s]",

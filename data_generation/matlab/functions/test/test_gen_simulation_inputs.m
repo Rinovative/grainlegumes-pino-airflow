@@ -52,7 +52,7 @@ opts.theta_smooth_rel = 0.05;
 
 % --- Porosity parameters ------------------------------------
 opts.A_rel = 2.0;
-opts.phi_smooth_rel = 0.05;
+opts.eps_smooth_rel = 0.05;
 opts.texture_amp = 0.005;
 
 % --- Pressure BC parameters ---------------------------------
@@ -85,10 +85,10 @@ opts.hooks.principal_k         = @(d) store_hook('principal_k', d);
 opts.hooks.tensor              = @(d) store_hook('tensor', d);
 
 % --- Porosity -----------------------------------------------
-opts.hooks.phi_input    = @(d) store_hook('phi_input', d);
-opts.hooks.phi_smoothed = @(d) store_hook('phi_smoothed', d);
-opts.hooks.phi_level    = @(d) store_hook('phi_level', d);
-opts.hooks.phi_final    = @(d) store_hook('phi_final', d);
+opts.hooks.eps_input    = @(d) store_hook('eps_input', d);
+opts.hooks.eps_smoothed = @(d) store_hook('eps_smoothed', d);
+opts.hooks.eps_level    = @(d) store_hook('eps_level', d);
+opts.hooks.eps_final    = @(d) store_hook('eps_final', d);
 
 % --- Pressure BC --------------------------------------------
 opts.hooks.p_inlet      = @(d) store_hook('p_inlet', d);
@@ -169,21 +169,21 @@ tiledlayout(2,2,'TileSpacing','compact','Padding','compact');
 
 % (1) Input backbone
 nexttile;
-plot_field(H.phi_input.z_bg, 'Input backbone z_{bg}');
+plot_field(H.eps_input.z_bg, 'Input backbone z_{bg}');
 % (2) Final permeability (reference)
 nexttile;
 plot_field(log10(H.kappa_final.kappa), 'log_{10}(\kappa)');
 % (3) Smoothed porosity backbone
 nexttile;
-plot_field(H.phi_smoothed.z_phi, 'Smoothed backbone z_{\phi}');
+plot_field(H.eps_smoothed.z_eps, 'Smoothed backbone z_{\varepsilon}');
 % (4) Final porosity field (large)
 nexttile;
-plot_field(H.phi_final.phi, '\phi(x,y) final');
+plot_field(H.eps_final.eps, '\varepsilon(x,y) final');
 
 % --- KC reference annotation (global, not a tile) ------------
 annotation('textbox', [0.30 0.01 0.40 0.07], ...
-    'String', sprintf('KC reference:  \\phi_{ref} = %.4f   |   k_{ref} = %.2e m^2', ...
-        H.phi_level.phi_ref, H.phi_level.k_ref), ...
+    'String', sprintf('KC reference:  \\varepsilon_{ref} = %.4f   |   k_{ref} = %.2e m^2', ...
+        H.eps_level.eps_ref, H.eps_level.k_ref), ...
     'EdgeColor','none', ...
     'HorizontalAlignment','center', ...
     'Interpreter','tex', ...

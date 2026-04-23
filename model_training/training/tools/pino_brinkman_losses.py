@@ -2,20 +2,20 @@
 Single entry-point for Brinkman PINO losses.
 
 Public API (4 losses):
-    - PINOPhysicalLossPhi   : Physical derivatives + conservative continuity div(phi u)
+    - PINOPhysicalLossEps   : Physical derivatives + conservative continuity div(eps u)
     - PINOPhysicalLossDiv   : Physical derivatives + plain continuity div(u)
-    - PINOSpectralLossPhi   : Spectral derivatives + conservative continuity div(phi u)
+    - PINOSpectralLossEps   : Spectral derivatives + conservative continuity div(eps u)
     - PINOSpectralLossDiv   : Spectral derivatives + plain continuity div(u)
 
 All are thin wrappers around a shared internal implementation. The only
 differences are:
     - derivative backend (Physical vs Spectral)
-    - continuity formulation (div(phi u) vs div(u))
+    - continuity formulation (div(eps u) vs div(u))
 
 Physics (strong, stationary, incompressible, conservative form):
     -∇p + ∇·tau - mu * K^{-1} u = 0
-    div(phi u) = 0   OR   div(u) = 0
-    tau = (mu/phi) * ( ∇u + ∇u^T - (2/3)(∇·u) I )
+    div(eps u) = 0   OR   div(u) = 0
+    tau = (mu/eps) * ( ∇u + ∇u^T - (2/3)(∇·u) I )
 
 Tensor conventions
 ------------------
@@ -193,7 +193,7 @@ class _SpectralDerivatives(_DerivativeBackend):
 # =============================================================================
 # Shared internal implementation
 # =============================================================================
-_ContinuityMode = Literal["phi_u", "u"]
+_ContinuityMode = Literal["eps_u", "u"]
 
 
 class _PINOBrinkmanLossBase(nn.Module):
@@ -201,7 +201,7 @@ class _PINOBrinkmanLossBase(nn.Module):
     Shared Brinkman PINO loss implementation.
 
     continuity_mode:
-        "phi_u" : div(phi u) = 0 (conservative for heterogeneous porous media)
+        "eps_u" : div(eps u) = 0 (conservative for heterogeneous porous media)
         "u"     : div(u) = 0     (plain incompressibility)
     """
 
@@ -218,7 +218,7 @@ class _PINOBrinkmanLossBase(nn.Module):
         interior_pad: int = 0,
         log_every: int = 10,
         # numeric safeties
-        eps_phi: float = 1e-6,
+        eps_eps: float = 1e-6,
         eps_K0: float = 1e-30,
         kxy_hat_clip: float = 0.999,
         det_hat_min: float = 1e-4,
@@ -239,7 +239,7 @@ class _PINOBrinkmanLossBase(nn.Module):
         self.log_every = int(log_every)
         self.step = 0
 
-        self._eps_phi = float(eps_phi)
+        self._eps_eps = float(eps_eps)
         self._eps_K0 = float(eps_K0)
         self._kxy_hat_clip = float(kxy_hat_clip)
         self._det_hat_min = float(det_hat_min)
@@ -267,7 +267,7 @@ class _PINOBrinkmanLossBase(nn.Module):
             pred and x must be in NORMALIZED space (same as forward()).
 
         Returns:
-            Rx, Ry, Rc, div_u, div_phi_u as (B,1,H,W) and scalar MSE terms.
+            Rx, Ry, Rc, div_u, div_eps_u as (B,1,H,W) and scalar MSE terms.
 
         """
         if self.in_normalizer is None or self.out_normalizer is None:
@@ -284,7 +284,7 @@ class _PINOBrinkmanLossBase(nn.Module):
         v = pred_phys[:, self.oidx["v"]]
 
         # Inputs
-        phi = x_phys[:, self.iidx["phi"]].clamp_min(self._eps_phi)
+        eps = x_phys[:, self.iidx["phi"]].clamp_min(self._eps_eps)
         p_bc = x_phys[:, self.iidx["p_bc"]]
 
         x_coord = x_phys[:, self.iidx["x"]]
@@ -304,7 +304,7 @@ class _PINOBrinkmanLossBase(nn.Module):
         div_u = dudx + dvdy
 
         # Brinkman viscous stress (COMSOL-like deviatoric)
-        coef = MU_AIR / phi
+        coef = MU_AIR / eps
         tau_xx = coef * (2.0 * dudx - (2.0 / 3.0) * div_u)
         tau_yy = coef * (2.0 * dvdy - (2.0 / 3.0) * div_u)
         tau_xy = coef * (dudy + dvdx)
@@ -334,8 +334,8 @@ class _PINOBrinkmanLossBase(nn.Module):
         Rx = -dpdx + div_tau_x - drag_x
         Ry = -dpdy + div_tau_y - drag_y
 
-        div_phi_u = self.backend.div(phi * u, phi * v, dx_t, dy_t)
-        Rc = div_phi_u if self.continuity_mode == "phi_u" else self.backend.div(u, v, dx_t, dy_t)
+        div_eps_u = self.backend.div(eps * u, eps * v, dx_t, dy_t)
+        Rc = div_eps_u if self.continuity_mode == "eps_u" else self.backend.div(u, v, dx_t, dy_t)
 
         # Interior-cropped (exactly like phys term in forward)
         pad = self.interior_pad
@@ -367,7 +367,7 @@ class _PINOBrinkmanLossBase(nn.Module):
             "Ry": Ry.unsqueeze(1),
             "Rc": Rc.unsqueeze(1),
             "div_u": div_u.unsqueeze(1),
-            "div_phi_u": div_phi_u.unsqueeze(1),
+            "div_eps_u": div_eps_u.unsqueeze(1),
             "mom_mse": mom_mse,
             "cont_mse": cont_mse,
             "mom_mse_full": mom_mse_full,
@@ -410,7 +410,7 @@ class _PINOBrinkmanLossBase(nn.Module):
         # ------------------------------------------------------------
         # 4) Inputs
         # ------------------------------------------------------------
-        phi = x_phys[:, self.iidx["phi"]].clamp_min(self._eps_phi)
+        eps = x_phys[:, self.iidx["eps"]].clamp_min(self._eps_eps)
         p_bc = x_phys[:, self.iidx["p_bc"]]
 
         x_coord = x_phys[:, self.iidx["x"]]
@@ -435,7 +435,7 @@ class _PINOBrinkmanLossBase(nn.Module):
         # ------------------------------------------------------------
         # 6) Brinkman viscous stress (COMSOL-like deviatoric)
         # ------------------------------------------------------------
-        coef = MU_AIR / phi
+        coef = MU_AIR / eps
         tau_xx = coef * (2.0 * dudx - (2.0 / 3.0) * div_u)
         tau_yy = coef * (2.0 * dvdy - (2.0 / 3.0) * div_u)
         tau_xy = coef * (dudy + dvdx)
@@ -469,9 +469,9 @@ class _PINOBrinkmanLossBase(nn.Module):
         Rx = -dpdx + div_tau_x - drag_x
         Ry = -dpdy + div_tau_y - drag_y
 
-        if self.continuity_mode == "phi_u":
-            Rc = self.backend.div(phi * u, phi * v, dx_t, dy_t)  # div(phi u)
-            rc_log_key = "physics/div_phi_u_l2"
+        if self.continuity_mode == "eps_u":
+            Rc = self.backend.div(eps * u, eps * v, dx_t, dy_t)  # div(eps u)
+            rc_log_key = "physics/div_eps_u_l2"
         elif self.continuity_mode == "u":
             Rc = self.backend.div(u, v, dx_t, dy_t)  # div(u)
             rc_log_key = "physics/div_u_l2"
@@ -535,8 +535,8 @@ class _PINOBrinkmanLossBase(nn.Module):
 # =============================================================================
 # Public wrappers (4 options)
 # =============================================================================
-class PINOPhysicalLossPhi(_PINOBrinkmanLossBase):
-    """Physical derivatives + conservative continuity div(phi u)."""
+class PINOPhysicalLossEps(_PINOBrinkmanLossBase):
+    """Physical derivatives + conservative continuity div(eps u)."""
 
     def __init__(
         self,
@@ -550,7 +550,7 @@ class PINOPhysicalLossPhi(_PINOBrinkmanLossBase):
         log_every: int = 10,
     ) -> None:
         """
-        Initialize the PINOPhysicalLossPhi.
+        Initialize the PINOPhysicalLossEps.
 
         Parameters
         ----------
@@ -572,7 +572,7 @@ class PINOPhysicalLossPhi(_PINOBrinkmanLossBase):
         """
         super().__init__(
             backend=_PhysicalDerivatives(),
-            continuity_mode="phi_u",
+            continuity_mode="eps_u",
             data_loss=data_loss,
             lambda_phys=lambda_phys,
             lambda_p=lambda_p,
@@ -631,8 +631,8 @@ class PINOPhysicalLossDiv(_PINOBrinkmanLossBase):
         )
 
 
-class PINOSpectralLossPhi(_PINOBrinkmanLossBase):
-    """Spectral derivatives + conservative continuity div(phi u)."""
+class PINOSpectralLossEps(_PINOBrinkmanLossBase):
+    """Spectral derivatives + conservative continuity div(eps u)."""
 
     def __init__(
         self,
@@ -647,7 +647,7 @@ class PINOSpectralLossPhi(_PINOBrinkmanLossBase):
         log_every: int = 10,
     ) -> None:
         """
-        Initialize the PINOSpectralLossPhi.
+        Initialize the PINOSpectralLossEps.
 
         Parameters
         ----------
@@ -671,7 +671,7 @@ class PINOSpectralLossPhi(_PINOBrinkmanLossBase):
         """
         super().__init__(
             backend=_SpectralDerivatives(grad_mode=grad_mode),
-            continuity_mode="phi_u",
+            continuity_mode="eps_u",
             data_loss=data_loss,
             lambda_phys=lambda_phys,
             lambda_p=lambda_p,

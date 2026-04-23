@@ -19,9 +19,9 @@ from torch.optim.optimizer import Optimizer
 
 from training.tools.pino_brinkman_losses import (
     PINOPhysicalLossDiv,
-    PINOPhysicalLossPhi,
+    PINOPhysicalLossEps,
     PINOSpectralLossDiv,
-    PINOSpectralLossPhi,
+    PINOSpectralLossEps,
 )
 from training.tools.spectral_hook import SpectralEnergyHook
 from training.train_base import train_base
@@ -36,9 +36,9 @@ CONFIG = {
     "device": "cuda" if torch.cuda.is_available() else "cpu",
     # --- Physics-informed training ---
     # Optionen:
-    #   "ps_phi"  -> Physical derivatives + div(phi u)
+    #   "ps_eps"  -> Physical derivatives + div(eps u)
     #   "ps_u"    -> Physical derivatives + div(u)
-    #   "sp_phi"  -> Spectral derivatives + div(phi u)
+    #   "sp_eps"  -> Spectral derivatives + div(eps u)
     #   "sp_u"    -> Spectral derivatives + div(u)
     "pino_loss_type": "sp_u",
     "grad_mode": "fft_reflect",  # only for spectral losses
@@ -93,10 +93,10 @@ def finalize_config(CONFIG: dict) -> None:
     )
 
     # Loss selection defaults
-    CONFIG.setdefault("pino_loss_type", "sp_phi")
+    CONFIG.setdefault("pino_loss_type", "sp_eps")
     CONFIG.setdefault("grad_mode", "fft_reflect")
     # interior_pad default: spectral sinnvoll >0, physical sinnvoll 0
-    lt = str(CONFIG.get("pino_loss_type", "sp_phi"))
+    lt = str(CONFIG.get("pino_loss_type", "sp_eps"))
     CONFIG.setdefault("interior_pad", 2 if lt.startswith("sp") else 0)
 
     # Physics-informed weights
@@ -177,11 +177,11 @@ def build_model_name(CONFIG: dict, model: UNO) -> str:
     m_x = int(CONFIG["modes_x"])
     m_y = int(CONFIG["modes_y"])
 
-    loss_type = str(CONFIG.get("pino_loss_type", "sp_phi"))
+    loss_type = str(CONFIG.get("pino_loss_type", "sp_eps"))
     tag_map = {
-        "ps_phi": "PI-UNO-PS-PHI",
+        "ps_eps": "PI-UNO-PS-EPS",
         "ps_u": "PI-UNO-PS-DIV",
-        "sp_phi": "PI-UNO-SP-PHI",
+        "sp_eps": "PI-UNO-SP-EPS",
         "sp_u": "PI-UNO-SP-DIV",
     }
     if loss_type not in tag_map:
@@ -233,15 +233,15 @@ def build_scheduler(optimizer: Optimizer) -> ReduceLROnPlateau:
 # --- Losses ---
 def build_train_loss(CONFIG: dict) -> nn.Module:
     """Build the training loss function based on the configuration."""
-    loss_type = str(CONFIG.get("pino_loss_type", "sp_phi"))
+    loss_type = str(CONFIG.get("pino_loss_type", "sp_eps"))
 
     grad_mode = str(CONFIG.get("grad_mode", "fft_reflect"))
     interior_pad = int(CONFIG.get("interior_pad", 2 if loss_type.startswith("sp") else 0))
 
     cls_map = {
-        "ps_phi": PINOPhysicalLossPhi,
+        "ps_eps": PINOPhysicalLossEps,
         "ps_u": PINOPhysicalLossDiv,
-        "sp_phi": PINOSpectralLossPhi,
+        "sp_eps": PINOSpectralLossEps,
         "sp_u": PINOSpectralLossDiv,
     }
     if loss_type not in cls_map:

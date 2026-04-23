@@ -130,7 +130,7 @@ def _build_sections(toggle: Callable[[str, Callable[..., object]], widgets.Widge
                 ),
                 toggle(
                     "4-9. Porosity-weighted continuity residual map (∇·(εu))",
-                    evaluation.evaluation_plot.evaluation_plot_physical_consistency.plot_div_phi_u_error_map,
+                    evaluation.evaluation_plot.evaluation_plot_physical_consistency.plot_div_eps_u_error_map,
                 ),
             ],
             "Physical Consistency",
@@ -173,6 +173,10 @@ def _build_sections(toggle: Callable[[str, Callable[..., object]], widgets.Widge
                 toggle(
                     "7-2. Kappa tensor with error overlay",
                     evaluation.evaluation_plot.evaluation_plot_sample_viewer.plot_sample_kappa_tensor_with_overlay,
+                ),
+                toggle(
+                    "7-3. Pressure & velocity field comparison",
+                    evaluation.evaluation_plot.evaluation_plot_sample_viewer.plot_pu_two_model_comparison,
                 ),
             ],
             "Sample Viewer",

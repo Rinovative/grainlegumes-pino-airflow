@@ -43,7 +43,7 @@ COORD_FIELDS = ["x", "y"]
 # All are represented as volume fields in COMSOL
 # ---------------------------------------------------------------------
 SCALAR_INPUT_FIELDS = {
-    "phi": "int4(x,y)",  # porosity (material field)
+    "eps": "int4(x,y)",  # porosity (material field)
     "p_bc": "int5(x,y)",  # pressure boundary condition (volume-encoded)
 }
 # ---------------------------------------------------------------------

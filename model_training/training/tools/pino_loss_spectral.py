@@ -9,7 +9,7 @@ Datenschema:
 - Inputs:
     - kxx, kyy: log10(Kxx), log10(Kyy)  (K in m^2)
     - kxy:      kxy_hat = Kxy / sqrt(Kxx*Kyy)  (dimensionless)
-    - phi:      Porosity (0..1)
+    - eps:      Porosity (0..1)
     - p_bc:     Pressure BC as volume field (0 except at inlet)
     - x, y:     Coordinate fields
 - Outputs:
@@ -17,8 +17,8 @@ Datenschema:
 
 Brinkman (strong, stationary, incompressible, conservative form):
   -∇p + ∇·tau - mu * K^{-1} u = 0
-  ∇·(phi u) = 0   (mass conservation in heterogeneous porous media)
-  tau = (mu/phi) * ( ∇u + ∇u^T - (2/3)(∇·u) I )
+  ∇·(eps u) = 0   (mass conservation in heterogeneous porous media)
+  tau = (mu/eps) * ( ∇u + ∇u^T - (2/3)(∇·u) I )
 
   Tensor conventions
 ------------------
@@ -253,15 +253,15 @@ class PINOSpectralLoss(nn.Module):
     - Inputs:
         - kxx, kyy: log10(Kxx), log10(Kyy)  (K in m^2)
         - kxy:      kxy_hat = Kxy / sqrt(Kxx*Kyy)  (dimensionless)
-        - phi:      Porosity (0..1)
+        - eps:      Porosity (0..1)
         - p_bc:     Pressure BC as volume field (0 except at inlet)
         - x, y:     Coordinate fields
     - Outputs:
         - p, u, v:  Physical fields (Pa, m/s, m/s) after inverse_transform
     Brinkman (strong, stationary, incompressible, conservative form):
     -∇p + ∇·tau - mu * K^{-1} u = 0
-    ∇·(phi u) = 0
-      tau = (mu/phi) * ( ∇u + ∇u^T - (2/3)(∇·u) I )  (deviatoric, COMSOL-like)
+    ∇·(eps u) = 0
+      tau = (mu/eps) * ( ∇u + ∇u^T - (2/3)(∇·u) I )  (deviatoric, COMSOL-like)
 
     Parameters
     ----------
@@ -341,8 +341,8 @@ class PINOSpectralLoss(nn.Module):
         self.log_every = int(log_every)
         self.step = 0
 
-        # numerical safeties (keine Guards)
-        self._eps_phi = 1e-6
+        # numerical safeties
+        self._eps_eps = 1e-6
         self._eps_det = 1e-30
         self._kxy_hat_clip = 0.999
 
@@ -407,7 +407,7 @@ class PINOSpectralLoss(nn.Module):
         # ------------------------------------------------------------
         # 4) Inputs
         # ------------------------------------------------------------
-        phi = x_phys[:, self.iidx["phi"]].clamp_min(self._eps_phi)
+        eps = x_phys[:, self.iidx["eps"]].clamp_min(self._eps_eps)
         p_bc = x_phys[:, self.iidx["p_bc"]]
 
         Kxx = 10.0 ** x_phys[:, self.iidx["kxx"]]
@@ -434,11 +434,11 @@ class PINOSpectralLoss(nn.Module):
         # ------------------------------------------------------------
         # 6) Brinkman viscous stress (COMSOL-like)
         # ------------------------------------------------------------
-        coef = MU_AIR / phi
+        coef = MU_AIR / eps
 
-        tau_xx = coef * (2.0 * dudx - (2.0 / 3.0) * div_u)  # τ_xx = (μ/φ) [ 2 ∂u/∂x - (2/3)(∇·u) ]
-        tau_yy = coef * (2.0 * dvdy - (2.0 / 3.0) * div_u)  # τ_yy = (μ/φ) [ 2 ∂v/∂y - (2/3)(∇·u) ]
-        tau_xy = coef * (dudy + dvdx)  # τ_xy = (μ/φ) [ ∂u/∂y + ∂v/∂x ]
+        tau_xx = coef * (2.0 * dudx - (2.0 / 3.0) * div_u)  # τ_xx = (μ/ε) [ 2 ∂u/∂x - (2/3)(∇·u) ]
+        tau_yy = coef * (2.0 * dvdy - (2.0 / 3.0) * div_u)  # τ_yy = (μ/ε) [ 2 ∂v/∂y - (2/3)(∇·u) ]
+        tau_xy = coef * (dudy + dvdx)  # τ_xy = (μ/ε) [ ∂u/∂y + ∂v/∂x ]
 
         div_tau_x = spectral_div(tau_xx, tau_xy, dx, dy, mode=self.grad_mode)  # ∇·τ_x = ∂τ_xx/∂x + ∂τ_xy/∂y
         div_tau_y = spectral_div(tau_xy, tau_yy, dx, dy, mode=self.grad_mode)  # ∇·τ_y = ∂τ_xy/∂x + ∂τ_yy/∂y
@@ -462,11 +462,11 @@ class PINOSpectralLoss(nn.Module):
         Rx = -dpdx + div_tau_x - drag_x
         Ry = -dpdy + div_tau_y - drag_y
 
-        phi_u = phi * u
-        phi_v = phi * v
-        div_phi_u = spectral_div(phi_u, phi_v, dx, dy, mode=self.grad_mode)
+        eps_u = eps * u
+        eps_v = eps * v
+        div_eps_u = spectral_div(eps_u, eps_v, dx, dy, mode=self.grad_mode)
 
-        Rc = div_phi_u  # R_c = ∇·(phi u)
+        Rc = div_eps_u  # R_c = ∇·(eps u)
 
         # ------------------------------------------------------------
         # 9) Interior-only physics
@@ -522,7 +522,7 @@ class PINOSpectralLoss(nn.Module):
                     # --- Physics diagnostics (L2 norms) ---
                     "physics/Rx_l2": Rx.pow(2).mean().sqrt().item(),
                     "physics/Ry_l2": Ry.pow(2).mean().sqrt().item(),
-                    "physics/div_phi_u_l2": Rc.pow(2).mean().sqrt().item(),
+                    "physics/div_eps_u_l2": Rc.pow(2).mean().sqrt().item(),
                 },
                 commit=False,
             )

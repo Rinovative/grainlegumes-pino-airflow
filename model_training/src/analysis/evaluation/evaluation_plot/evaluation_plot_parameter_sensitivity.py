@@ -34,8 +34,8 @@ class _CheckboxGroupProto(Protocol):
 CHANNELS = ["p", "u", "v", "U"]
 EPS = 1e-12
 DROP_PARAMETER_SUBSTRINGS = (
-    "phi_max_global",
-    "phi_min_global",
+    "eps_max_global",
+    "eps_min_global",
 )
 
 
@@ -202,7 +202,7 @@ def plot_parameter_error_heatmap(*, datasets: dict[str, pd.DataFrame]) -> widget
         # --------------------------------------------------
         par_cols = sorted(set.intersection(*[{c for c in df.columns if _is_parameter_column(c)} for df in datasets.values()]))
 
-        # rauswerfen (z.B. phi_min/max_global)
+        # rauswerfen (z.B. eps_min/max_global)
         par_cols = [c for c in par_cols if not _drop_parameter_column(c)]
 
         if not par_cols:

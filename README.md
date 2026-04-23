@@ -15,9 +15,9 @@ This specialization project studies the learning of physically consistent surrog
 High-fidelity permeability and porosity fields are synthetically generated in **MATLAB** and simulated with **COMSOL Multiphysics** using a Darcy–Brinkman formulation.  
 The central objective is to train two-dimensional neural operators that learn the operator mapping
 
-  **(κ, φ, p_bc) → (p, u, v)**
+  **(κ, ε, p_bc) → (p, u, v)**
 
-from spatially varying permeability tensors κ, porosity fields φ, and inlet pressure boundary conditions p_bc to pressure and velocity fields, while explicitly enforcing physical consistency through PDE-based constraints.
+from spatially varying permeability tensors κ, porosity fields ε, and inlet pressure boundary conditions p_bc to pressure and velocity fields, while explicitly enforcing physical consistency through PDE-based constraints.
 
 The repository provides a complete, modular research pipeline covering:
 
@@ -133,7 +133,7 @@ subgraph DG[DATA GENERATION]
         subgraph GMF[gen_simulation_inputs.m]
             M2[*gen_structure_field.m*<br/>Structure synthesis<br/>Multi scale stochastic geometry]
             M3[*gen_permeability_field.m*<br/>κ<br/>Permeability construction<br/>Scalar and tensor fields kappa]
-            M4[*gen_porosity_field.m*<br/>φ<br/>Porosity modelling<br/>Field phi with Kozeny Carman anchoring]
+            M4[*gen_porosity_field.m*<br/>ε<br/>Porosity modelling<br/>Field epsilon with Kozeny Carman anchoring]
             M5[*gen_pressure_bc.m*<br/>p_bc<br/>Boundary condition generation]
             M6[*gen_export_fields.m*<br/>Export generator outputs]
 
