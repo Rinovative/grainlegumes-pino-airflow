@@ -22,7 +22,7 @@ from spatially varying permeability tensors κ, porosity fields ε, and inlet pr
 The repository provides a complete, modular research pipeline covering:
 
 <details>
-<summary><strong>🧩 **Data generation**  </strong></summary>
+<summary><strong>🧩 Data generation  </strong></summary>
 
 A fully automated MATLAB-driven pipeline for synthetic porous-media data generation, including:
 - **Parameter sampling**: space-filling sampling strategies (uniform, LHS, Sobol)
@@ -36,7 +36,7 @@ The pipeline supports resume-safe batch execution, reproducible seeding, and ric
 
 
 <details>
-<summary><strong>📊 **Exploratory Data Analysis (EDA)**</strong></summary>
+<summary><strong>📊 Exploratory Data Analysis (EDA)</strong></summary>
 
 An interactive EDA framework including:
 - **Statistical analysis**: case-level distributions of generator parameters, meta statistics, and reduced field statistics (min/mean/max)
@@ -46,7 +46,7 @@ An interactive EDA framework including:
 
 
 <details>
-<summary><strong>⚙️ **Neural Operator training (FNO / U-NO / PINOs)**  </strong></summary>
+<summary><strong>⚙️ Neural Operator training (FNO / U-NO / PINOs)  </strong></summary>
 
 A modular, reproducible training framework for neural operator models, including:
 - **Architectures**: FNO, U-NO, and physics-informed variants (PI-FNO, PI-U-NO)
@@ -59,7 +59,7 @@ A modular, reproducible training framework for neural operator models, including
 
 
 <details>
-<summary><strong>🧪 **Evaluation**</strong></summary>
+<summary><strong>🧪 Evaluation</strong></summary>
 
 A evaluation suite for systematic model comparison and assessment, supporting both cross-model comparison on fixed datasets and cross-dataset generalisation analysis (ID and OOD), including:
 - **Global error analysis**: L2 and relative L2 metrics, distributions, CDFs, mean and standard-deviation error maps, and frequency-domain error spectra
@@ -73,6 +73,29 @@ A evaluation suite for systematic model comparison and assessment, supporting bo
 
 🧬 **Interactive research environment**  
 All evaluation components are provided as interactive Jupyter widgets with dataset selection, case sliders and dynamic plots for systematic exploration of model behaviour.
+
+---
+
+## 📄 Project Report
+
+The full project report, including methodology, model formulation, and detailed evaluation results, is available here:
+
+👉 [Albertin_2026_PINO_Airflow_PorousMedia.pdf](docs/Albertin_2026_PINO_Airflow_PorousMedia.pdf)
+
+---
+
+## 📊 Visualizations
+
+<p align="center">
+  <img src="docs/figures/App_OutlierCase482PI-UNO.png" width="900">
+</p>
+
+<p align="center">
+<em>
+Evaluation of the best-performing model (PI-U-NO with physics-informed loss) on a challenging outlier case.  
+The model accurately reconstructs pressure and velocity fields, maintaining low error and physically consistent flow patterns even under highly heterogeneous and non-trivial permeability configurations.
+</em>
+</p>
 
 ---
 
@@ -450,10 +473,6 @@ Then open the URL shown in the terminal.
 └── README.md                                                         # Project overview and usage documentation
 ```
 </details>
-
----
-
-## 📊 Visualizations
 
 ---
 
