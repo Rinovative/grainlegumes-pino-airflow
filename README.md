@@ -78,13 +78,12 @@ All evaluation components are provided as interactive Jupyter widgets with datas
 
 ## 📄 Project Report
 
-The full project report, including methodology, model formulation, and detailed evaluation results, is available here:
-
-👉 [Albertin_2026_PINO_Airflow_PorousMedia.pdf](docs/Albertin_2026_PINO_Airflow_PorousMedia.pdf)
+Full project report, including methodology, model formulation, and detailed evaluation results:
+[Albertin_2026_PINO_Airflow_PorousMedia.pdf](docs/Albertin_2026_PINO_Airflow_PorousMedia.pdf)
 
 ---
 
-## 📊 Visualizations
+## 📊 Visualization
 
 <p align="center">
   <img src="docs/figures/App_OutlierCase482PI-UNO.png" width="900">

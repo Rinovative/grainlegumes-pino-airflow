@@ -1,69 +1,68 @@
 # ==========================================
-# 🧠 GrainLegumes_PINO
-# Base: CUDA 12.1 + cuDNN8 on Ubuntu 22.04
+# GrainLegumes PINO Airflow
+# CUDA 12.1 + cuDNN8 + Micromamba
 # ==========================================
 
 FROM nvidia/cuda:12.1.0-cudnn8-devel-ubuntu22.04
+
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Etc/UTC
+ENV MAMBA_ROOT_PREFIX=/opt/micromamba
+ENV ENV_NAME=grainlegumes-pino
 
 # ----------------------------------------------------------------------
-# 🧩 System layer
+# System layer
 # ----------------------------------------------------------------------
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        curl bzip2 git wget build-essential ca-certificates \
-        openssh-client tini && \
+        bash \
+        bzip2 \
+        ca-certificates \
+        curl \
+        git \
+        openssh-client \
+        tini \
+        wget \
+        build-essential && \
     rm -rf /var/lib/apt/lists/*
 
 # ----------------------------------------------------------------------
-# 🧬 Micromamba Installation
+# Micromamba
 # ----------------------------------------------------------------------
-ENV MAMBA_ROOT_PREFIX=/opt/micromamba
 RUN curl -Ls https://micro.mamba.pm/api/micromamba/linux-64/latest \
     | tar -xvj -C /usr/local/bin --strip-components=1 bin/micromamba
 
 # ----------------------------------------------------------------------
-# 👤 Non-root user, permission fix
+# Create environment
 # ----------------------------------------------------------------------
-RUN useradd -m -u 1000 -s /bin/bash mambauser && \
-    mkdir -p \
-      /home/mambauser/workspace/data \
-      /home/mambauser/workspace/data_generation/data \
-      /home/mambauser/workspace/model_training/data && \
-    chown -R mambauser:mambauser /home/mambauser/workspace && \
-    chmod -R a+rwX /home/mambauser/workspace
+COPY environment.yml /tmp/environment.yml
 
-# ----------------------------------------------------------------------
-# 📦 Environment creation
-# ----------------------------------------------------------------------
-COPY --chown=mambauser:mambauser environment.yml /tmp/environment.yml
-USER root
 RUN micromamba env create -f /tmp/environment.yml -y && \
     micromamba clean --all --yes
-USER mambauser
 
 # ----------------------------------------------------------------------
-# 🧠 Default execution environment
+# Workspace layout
 # ----------------------------------------------------------------------
-ENV MAMBA_DOCKERFILE_ACTIVATE=1
-SHELL ["micromamba", "run", "-n", "grainlegumes-pino", "/bin/bash", "-c"]
+RUN mkdir -p /workspace/repo /workspace/storage
+
+WORKDIR /workspace/repo
 
 # ----------------------------------------------------------------------
-# 📂 Copy source and install package
+# Install project into environment
 # ----------------------------------------------------------------------
-WORKDIR /home/mambauser/workspace
-COPY --chown=mambauser:mambauser . /home/mambauser/workspace
+COPY . /workspace/repo
 
-USER root
-RUN micromamba run -n grainlegumes-pino pip install -e /home/mambauser/workspace
-USER mambauser
+RUN micromamba run -n ${ENV_NAME} pip install -e /workspace/repo
 
 # ----------------------------------------------------------------------
-# ⚙️ Runtime — tini + init_permissions
+# Runtime defaults
 # ----------------------------------------------------------------------
-RUN echo 'eval "$(micromamba shell hook --shell bash)"' >> /home/mambauser/.bashrc && \
-    echo 'micromamba activate grainlegumes-pino' >> /home/mambauser/.bashrc
+ENV PATH=/opt/micromamba/envs/${ENV_NAME}/bin:$PATH
+ENV PROJECT_ROOT=/workspace/repo
+ENV STORAGE_ROOT=/workspace/storage
+ENV DATA_ROOT=/workspace/storage/data
+ENV GEN_ROOT=/workspace/storage/data_generation
+ENV TRAIN_ROOT=/workspace/storage/data_training
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["/bin/bash", "-l"]
+CMD ["/bin/bash"]
