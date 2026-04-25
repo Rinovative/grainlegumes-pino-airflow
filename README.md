@@ -91,8 +91,7 @@ Full project report, including methodology, model formulation, and detailed eval
 
 <p align="center">
 <em>
-Evaluation of the best-performing model (PI-U-NO with physics-informed loss) on a challenging outlier case.  
-The model accurately reconstructs pressure and velocity fields, maintaining low error and physically consistent flow patterns even under highly heterogeneous and non-trivial permeability configurations.
+Evaluation of the best-performing model (PI-U-NO with physics-informed loss) on a challenging outlier case.
 </em>
 </p>
 

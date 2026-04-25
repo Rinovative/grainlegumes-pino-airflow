@@ -125,7 +125,7 @@ def mae(
     """
     yt = _to_numpy(y_true)
     yp = _to_numpy(y_pred)
-    return np.mean(np.abs(yp - yt), axis=axis)
+    return np.asarray(np.mean(np.abs(yp - yt), axis=axis), dtype=np.float64)
 
 
 # ============================================================================

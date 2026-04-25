@@ -1,12 +1,18 @@
 name: grainlegumes-pino
+
 channels:
   - pytorch
   - nvidia
   - conda-forge
+
 dependencies:
   - python=3.11
+
+  # PyTorch / CUDA
   - pytorch=2.4
   - pytorch-cuda=12.1
+
+  # Scientific stack
   - numpy
   - scipy
   - pandas
@@ -14,9 +20,18 @@ dependencies:
   - seaborn
   - tqdm
   - pyarrow
+
+  # Interactive / notebooks
   - ipykernel
   - ipywidgets
   - ipython
+
+  # Code quality / VS Code
+  - ruff
+  - mypy
+  - nbqa
+
+  # Pip packages
   - pip
   - pip:
       - neuraloperator==2.0.*

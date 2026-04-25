@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+GPU_ID="$1"
+SCRIPT_NAME="$2"
+LOG_BASENAME="$3"
+shift 3
+
 IMAGE_NAME="grainlegumes-pino-airflow"
-CONTAINER_NAME="grainlegumes-pino-airflow-dev"
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 STORAGE_DIR="$(cd "${PROJECT_DIR}/../storage" && pwd)"
 DOCKER_HOME="${STORAGE_DIR}/.docker_home"
+LOG_FILE="/workspace/repo/logs/${LOG_BASENAME}"
 
-mkdir -p "${PROJECT_DIR}/logs" "${DOCKER_HOME}"
+mkdir -p "${DOCKER_HOME}"
 
 # ----------------------------------------------------------------------
 # Create runtime user mapping for container
@@ -26,27 +31,22 @@ EOF
 chmod 644 "${DOCKER_HOME}/passwd" "${DOCKER_HOME}/group"
 
 # ----------------------------------------------------------------------
-# Optional SSH mount for Git operations
+# Resolve script by filename
 # ----------------------------------------------------------------------
-SSH_ARGS=()
-if [ -d "${HOME}/.ssh" ]; then
-  SSH_ARGS=(-v "${HOME}/.ssh:/workspace/storage/.docker_home/.ssh:ro")
+SCRIPT_ABS_PATH="$(
+  find "${PROJECT_DIR}" \
+    -path "${PROJECT_DIR}/.git" -prune -o \
+    -path "${PROJECT_DIR}/logs" -prune -o \
+    -type f -name "${SCRIPT_NAME}" -print \
+    | head -n 1
+)"
+
+if [ -z "${SCRIPT_ABS_PATH}" ]; then
+  echo "Script not found by name: ${SCRIPT_NAME}"
+  exit 1
 fi
 
-# ----------------------------------------------------------------------
-# Prevent duplicate dev container
-# ----------------------------------------------------------------------
-if docker ps --format "{{.Names}}" | grep -qx "${CONTAINER_NAME}"; then
-  echo "Container '${CONTAINER_NAME}' is already running."
-  echo "Attach with VS Code or stop it with:"
-  echo "  docker stop ${CONTAINER_NAME}"
-  exit 0
-fi
-
-if docker ps -a --format "{{.Names}}" | grep -qx "${CONTAINER_NAME}"; then
-  echo "Removing stopped container '${CONTAINER_NAME}'."
-  docker rm "${CONTAINER_NAME}" >/dev/null
-fi
+SCRIPT_RELATIVE_PATH="${SCRIPT_ABS_PATH#${PROJECT_DIR}/}"
 
 # ----------------------------------------------------------------------
 # Load W&B key if available
@@ -57,11 +57,18 @@ if [ -z "${WANDB_API_KEY_VALUE}" ] && [ -f "${HOME}/wandb_key.txt" ]; then
 fi
 
 # ----------------------------------------------------------------------
-# Start dev container
+# Optional SSH mount for Git operations
 # ----------------------------------------------------------------------
-docker run -d --rm \
-  --name "${CONTAINER_NAME}" \
-  --gpus all \
+SSH_ARGS=()
+if [ -d "${HOME}/.ssh" ]; then
+  SSH_ARGS=(-v "${HOME}/.ssh:/workspace/storage/.docker_home/.ssh:ro")
+fi
+
+# ----------------------------------------------------------------------
+# Run queued job inside Docker
+# ----------------------------------------------------------------------
+docker run --rm \
+  --gpus "\"device=${GPU_ID}\"" \
   --user "$(id -u):$(id -g)" \
   --shm-size=16G \
   --workdir /workspace/repo \
@@ -79,8 +86,4 @@ docker run -d --rm \
   -v "${STORAGE_DIR}:/workspace/storage:rw" \
   "${SSH_ARGS[@]}" \
   "${IMAGE_NAME}" \
-  bash -lc "sleep infinity"
-
-echo "Container started: ${CONTAINER_NAME}"
-echo "Attach with VS Code: Remote Explorer -> Containers -> ${CONTAINER_NAME}"
-echo "Stop with: docker stop ${CONTAINER_NAME}"
+  bash -lc "mkdir -p /workspace/repo/logs && python '/workspace/repo/${SCRIPT_RELATIVE_PATH}' \"\$@\" > '${LOG_FILE}' 2>&1" -- "$@"

@@ -3,11 +3,11 @@ requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "grainlegumes-pino"
+name = "grainlegumes-pino-airflow"
 version = "0.1.0"
-description = "Synthetic permeability generation and PINO training pipeline"
+description = "Physics-informed neural-operator pipeline for steady 2D airflow through heterogeneous porous media, motivated by grain-legume drying applications."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [{ name = "Rino M. Albertin" }]
 
 [tool.setuptools]
@@ -25,11 +25,23 @@ include = ["src*"]
 line-length = 150
 target-version = "py311"
 extend-exclude = [
-  "venv", ".venv", "data", "outputs", "results", "build", "dist"
+  "venv",
+  ".venv",
+  "mlenv",
+  ".mypy_cache",
+  ".ruff_cache",
+  "logs",
+  "data",
+  "data_generation/data",
+  "model_training/data",
+  "outputs",
+  "results",
+  "build",
+  "dist"
 ]
 
 # ------------------------------------------------------------
-# ✨ Ruff Formatter (PEP 8 / PEP 257 aligned)
+# ✨ Ruff Formatter
 # ------------------------------------------------------------
 [tool.ruff.format]
 quote-style = "double"
@@ -46,38 +58,37 @@ ignore = [
   # 🔧 Formatting conflicts
   "COM812",  # Trailing comma handled by formatter
 
-  # 🧾 Docstring style (PEP 257 consistency)
-  "D203",  # No blank line before class (conflicts with D211)
-  "D212",  # Summary line position (conflicts with D213)
+  # 🧾 Docstring style conflicts
+  "D203",  # Conflicts with D211
+  "D212",  # Conflicts with D213
 
-  # 📦 Import conventions
-  "INP001",  # Implicit namespace package (src-layout)
+  # 📦 Current package structure
+  "INP001",  # Allow implicit namespace-style layout in current src setup
 
-  # intentional ignores
-  "ANN401",  # Typing Any
-  "FBT001", "FBT002", "FBT003",  # Boolean positional arguments
-  "PLR0913",  # Too many function arguments
-  "N806", "N803",  # Variable naming conventions (scientific code)
-  "EXE002",  # Missing executable permissions
-  "T201",    # Print statements
-  "ERA001",  # commented-out code disallowed
+  # 🔬 Scientific / research code conventions
+  "ANN401",  # Allow Any
+  "FBT001", "FBT002", "FBT003",  # Allow boolean arguments
+  "PLR0913",  # Allow many function arguments
+  "N806", "N803",  # Allow scientific variable names
+  "EXE002",  # Ignore executable-bit mismatch
+  "T201",  # Allow print statements
+  "ERA001",  # Allow commented-out code during research cleanup
 ]
 fixable = ["ALL"]
 
 # ------------------------------------------------------------
-# 🧠 Code complexity (McCabe)
+# 🧠 Code complexity
 # ------------------------------------------------------------
 [tool.ruff.lint.mccabe]
 max-complexity = 20
 
 # ------------------------------------------------------------
-# 🧱 Structural limits (Pylint-style)
+# 🧱 Structural limits
 # ------------------------------------------------------------
 [tool.ruff.lint.pylint]
 max-branches = 20
 max-statements = 100
 max-returns = 10
-
 
 # ============================================================
 # 🧮 Type Checking
@@ -90,7 +101,11 @@ warn_unused_configs = true
 strict_optional = true
 
 exclude = [
-    "model_training/training/"
+  "model_training/training/",
+  "logs/",
+  "data/",
+  "data_generation/data/",
+  "model_training/data/",
 ]
 
 # ============================================================

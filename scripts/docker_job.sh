@@ -3,6 +3,7 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 LOG_DIR="${PROJECT_DIR}/logs"
+
 mkdir -p "${LOG_DIR}"
 
 SCRIPT_PATH="${1:-model_training/src/util/util_gpu_test.py}"
@@ -36,7 +37,8 @@ SCRIPT_TAG="$(basename "${SCRIPT_NAME}" .py)"
 LOG_BASENAME="${TIMESTAMP}__${SCRIPT_TAG}__gpu${GPU_ID}.log"
 
 cd "${PROJECT_DIR}"
-runTSGPU.py -g"${GPU_ID}" -- scripts/docker_run.sh \
+
+runTSGPU.py -g"${GPU_ID}" -- scripts/_docker_run.sh \
   "${GPU_ID}" \
   "${SCRIPT_NAME}" \
   "${LOG_BASENAME}" \
