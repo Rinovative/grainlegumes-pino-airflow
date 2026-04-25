@@ -8,7 +8,15 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 STORAGE_DIR="$(cd "${PROJECT_DIR}/../storage" && pwd)"
 DOCKER_HOME="${STORAGE_DIR}/.docker_home"
 
-mkdir -p "${PROJECT_DIR}/logs" "${DOCKER_HOME}"
+mkdir -p \
+  "${PROJECT_DIR}/logs" \
+  "${PROJECT_DIR}/data" \
+  "${PROJECT_DIR}/data_generation/data" \
+  "${PROJECT_DIR}/model_training/data" \
+  "${STORAGE_DIR}/data" \
+  "${STORAGE_DIR}/data_generation" \
+  "${STORAGE_DIR}/data_training" \
+  "${DOCKER_HOME}"
 
 # ----------------------------------------------------------------------
 # Create runtime user mapping for container
@@ -77,6 +85,9 @@ docker run -d --rm \
   -v "${DOCKER_HOME}/group:/etc/group:ro" \
   -v "${PROJECT_DIR}:/workspace/repo:rw" \
   -v "${STORAGE_DIR}:/workspace/storage:rw" \
+  -v "${STORAGE_DIR}/data:/workspace/repo/data:rw" \
+  -v "${STORAGE_DIR}/data_generation:/workspace/repo/data_generation/data:rw" \
+  -v "${STORAGE_DIR}/data_training:/workspace/repo/model_training/data:rw" \
   "${SSH_ARGS[@]}" \
   "${IMAGE_NAME}" \
   bash -lc "sleep infinity"
