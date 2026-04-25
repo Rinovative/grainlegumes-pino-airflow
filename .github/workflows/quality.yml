@@ -1,12 +1,12 @@
-name: Quality Checks
+name: Quality Report
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
 
 jobs:
-  quality:
+  quality-report:
     runs-on: ubuntu-latest
 
     steps:
@@ -20,122 +20,128 @@ jobs:
           cache-downloads: true
           init-shell: bash
 
-      - name: Run Ruff (Lint + Format)
+      - name: Ruff report
         shell: bash -l {0}
         run: |
           ruff check . || true
           ruff format --check . --exclude "*.ipynb" || true
 
-      - name: Run Type Checking (mypy)
+      - name: Mypy report
         shell: bash -l {0}
         run: |
           mypy . || true
 
-      - name: Complexity Analysis
+      - name: Complexity report
         shell: bash -l {0}
         run: |
           python - << 'EOF'
           import json
           import subprocess
 
-          # Format: Ganzzahl → ohne Dezimalstellen, sonst auf 2 runden
-          def fmt(v: float) -> str:
-              v = float(v)
-              return str(int(v)) if v.is_integer() else f"{v:.2f}"
 
-          # Grade aus numerischer Komplexität (radon-Style)
-          def grade_for(c: float) -> str:
-              if c <= 5:
+          def format_complexity(value: float) -> str:
+              """Format integer values without decimals and other values with two decimals."""
+              value = float(value)
+              return str(int(value)) if value.is_integer() else f"{value:.2f}"
+
+
+          def complexity_grade(complexity: float) -> str:
+              """Return the Radon-style complexity grade for a numeric complexity value."""
+              if complexity <= 5:
                   return "A"
-              if c <= 10:
+              if complexity <= 10:
                   return "B"
-              if c <= 20:
+              if complexity <= 20:
                   return "C"
-              if c <= 30:
+              if complexity <= 30:
                   return "D"
-              if c <= 40:
+              if complexity <= 40:
                   return "E"
               return "F"
 
-          # Reihenfolge für worst → best
-          rank_sort = {"F": 0, "E": 1, "D": 2, "C": 3, "B": 4, "A": 5}
 
-          # -----------------------------
-          # radon ausführen
-          # -----------------------------
-          proc = subprocess.run(
+          grade_sort_order = {"F": 0, "E": 1, "D": 2, "C": 3, "B": 4, "A": 5}
+
+          result = subprocess.run(
               ["radon", "cc", "-j", "."],
               capture_output=True,
               text=True,
+              check=False,
           )
-          data = json.loads(proc.stdout)
+          data = json.loads(result.stdout)
 
-          # Alle Blöcke sammeln
-          blocks_all = [b for file in data for b in data[file]]
-          total_files = sum(1 for f in data if data[f])
-          avg = (
-              sum(b["complexity"] for b in blocks_all) / len(blocks_all)
-              if blocks_all
+          all_blocks = [block for file in data for block in data[file]]
+          total_files = sum(1 for file in data if data[file])
+
+          average_complexity = (
+              sum(block["complexity"] for block in all_blocks) / len(all_blocks)
+              if all_blocks
               else 0.0
           )
-          global_grade = grade_for(avg)
+          global_grade = complexity_grade(average_complexity)
 
-          # Worst-Block pro File
           file_rows: list[tuple[str, str, float, list[dict]]] = []
           for file, blocks in data.items():
               if not blocks:
                   continue
-              worst = max(blocks, key=lambda b: b["complexity"])
-              file_rows.append((file, worst["rank"], worst["complexity"], blocks))
 
-          # Sortierung: zuerst schlechtester Grade, dann hohe CC
+              worst_block = max(blocks, key=lambda block: block["complexity"])
+              file_rows.append(
+                  (
+                      file,
+                      worst_block["rank"],
+                      worst_block["complexity"],
+                      blocks,
+                  )
+              )
+
           file_rows.sort(
-              key=lambda x: (rank_sort.get(x[1], 999), -float(x[2]))
+              key=lambda row: (
+                  grade_sort_order.get(row[1], 999),
+                  -float(row[2]),
+              )
           )
 
-          # ==========================================================
-          # TABLE 1: SUMMARY
-          # ==========================================================
           print("=================== COMPLEXITY SUMMARY ===================")
           print(f"Total files analysed: {total_files}")
-          print(f"Global complexity:     {global_grade} ({avg:.2f})")
+          print(f"Global complexity:     {global_grade} ({average_complexity:.2f})")
           print("==========================================================")
           print()
 
-          # ==========================================================
-          # TABLE 2: PER FILE
-          # ==========================================================
           print("=================== COMPLEXITY PER FILE ===================")
           print("Grade  CC          File")
           print("==============================================================")
 
-          last_rank: str | None = None
-          for file, rank, cc, _blocks in file_rows:
-              if last_rank is not None and rank != last_rank:
+          previous_rank: str | None = None
+          for file, rank, complexity, _blocks in file_rows:
+              if previous_rank is not None and rank != previous_rank:
                   print("-------------------------------------------------------------------------------")
-              print(f"{rank:<6} {fmt(cc):<10} {file}")
-              last_rank = rank
+
+              print(f"{rank:<6} {format_complexity(complexity):<10} {file}")
+              previous_rank = rank
 
           print("==============================================================")
           print()
 
-          # ==========================================================
-          # TABLE 3: FUNCTION BREAKDOWN
-          # ==========================================================
           print("=================== FUNCTION BREAKDOWN ===================")
           print("Item                                         Grade(CC)")
           print("============================================================")
 
-          for file, rank, cc, blocks in file_rows:
+          for file, _rank, _complexity, blocks in file_rows:
               print("------------------------------------------------------------")
               print(file)
-              blocks_sorted = sorted(
+
+              sorted_blocks = sorted(
                   blocks,
-                  key=lambda b: (rank_sort.get(b["rank"], 999), -float(b["complexity"]))
+                  key=lambda block: (
+                      grade_sort_order.get(block["rank"], 999),
+                      -float(block["complexity"]),
+                  ),
               )
-              for b in blocks_sorted:
-                  cc_fmt = fmt(b["complexity"])
-                  print(f"  {b['name']:<40} {b['rank']}({cc_fmt})")
+
+              for block in sorted_blocks:
+                  complexity_text = format_complexity(block["complexity"])
+                  print(f"  {block['name']:<40} {block['rank']}({complexity_text})")
 
           print("============================================================")
           EOF

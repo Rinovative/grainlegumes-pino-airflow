@@ -1,0 +1,23 @@
+{
+  "python.defaultInterpreterPath": "/opt/micromamba/envs/grainlegumes-pino/bin/python",
+
+  "editor.formatOnSave": true,
+  "editor.defaultFormatter": "charliermarsh.ruff",
+
+  "editor.codeActionsOnSave": {
+    "source.fixAll": "always",
+    "source.organizeImports": "always"
+  },
+
+  "notebook.formatOnSave.enabled": true,
+  "notebook.defaultFormatter": "charliermarsh.ruff",
+  "notebook.codeActionsOnSave": {
+    "source.fixAll": "always",
+    "source.organizeImports": "always"
+  },
+
+  "python.analysis.typeCheckingMode": "basic",
+
+  "ruff.organizeImports": true,
+  "ruff.fixAll": true
+}

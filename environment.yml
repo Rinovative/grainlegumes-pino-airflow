@@ -6,8 +6,6 @@ channels:
 dependencies:
   - python=3.11
   - pytorch=2.4
-  - torchvision
-  - torchaudio
   - pytorch-cuda=12.1
   - numpy
   - scipy
@@ -15,24 +13,12 @@ dependencies:
   - matplotlib
   - seaborn
   - tqdm
-  - torchmetrics
-  - ipykernel
-  - jupyter
-  - jupyterlab
-  - ipympl
-  - black
-  - isort
-  - ruff
-  - mypy
-  - nbqa
-  - pre-commit
-  - radon
   - pyarrow
+  - ipykernel
+  - ipywidgets
+  - ipython
   - pip
   - pip:
       - neuraloperator==2.0.*
       - wandb
-      - pyfftw
-      - numba
-      - complexipy
       - optuna
