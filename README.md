@@ -85,6 +85,20 @@ Full project report, including methodology, model formulation, and detailed eval
 
 ## 📊 Visualization
 
+### Qualitative model comparison
+
+<p align="center">
+  <img src="docs/figures/model_comparison_pressure.png" width="950">
+</p>
+
+<p align="center">
+<em>
+Representative qualitative comparison of pressure-field predictions for supervised and physics-informed neural-operator variants against the CFD reference solution. The figure illustrates differences in large-scale pressure structure, local deviations and physical consistency between FNO, U-NO and their physics-informed variants.
+</em>
+</p>
+
+### Outlier-case inspection
+
 <p align="center">
   <img src="docs/figures/App_OutlierCase482PI-UNO.png" width="900">
 </p>
