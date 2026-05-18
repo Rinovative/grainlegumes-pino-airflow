@@ -38,7 +38,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import torch
-from src import domain
+from src import common, domain
 from tqdm import tqdm
 
 # =============================================================================
@@ -122,25 +122,8 @@ def build_batch_dataset(batch_name: str, verbose: bool = False) -> dict:  # noqa
     # ------------------------------------------------------------------
     # Paths
     # ------------------------------------------------------------------
-    PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-    DATA_GENERATION = PROJECT_ROOT / "data_generation" / "data"
-    DATA_RAW = PROJECT_ROOT / "data" / "raw"
-
-    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
-    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
-    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
-    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
-    import os
-
-    DATA_ROOT = Path(os.environ.get("TMP_DATA_ROOT", "/home/rino.albertin/workspace/tmp_data"))
-
-    DATA_GENERATION = DATA_ROOT / "temp_data_generation"
-    DATA_RAW = DATA_ROOT / "temp_data" / "temp_raw"
-    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
-    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
-    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
-    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
+    DATA_GENERATION = common.paths.get_gen_root()
+    DATA_RAW = common.paths.get_train_root()
 
     proc_dir = DATA_GENERATION / "processed" / batch_name
     raw_dir = DATA_GENERATION / "raw" / batch_name
@@ -160,13 +143,13 @@ def build_batch_dataset(batch_name: str, verbose: bool = False) -> dict:  # noqa
 
     json_names = {f.stem for f in json_files}
     csv_names = {f.stem.replace("_sol", "") for f in csv_files}
-    common = sorted(json_names.intersection(csv_names))
+    common_cases = sorted(json_names.intersection(csv_names))
 
-    if not common:
+    if not common_cases:
         msg = f"No valid matching cases found for {batch_name}"
         raise RuntimeError(msg)
 
-    log.append(f"Found {len(common)} matching cases.")
+    log.append(f"Found {len(common_cases)} matching cases.")
 
     # ------------------------------------------------------------------
     # IO helpers
@@ -342,8 +325,8 @@ def build_batch_dataset(batch_name: str, verbose: bool = False) -> dict:  # noqa
     # Drop detection (reference case)
     # ------------------------------------------------------------------
     df_first, meta_first = load_case(
-        proc_dir / f"{common[0]}_sol.csv",
-        raw_dir / f"{common[0]}.json",
+        proc_dir / f"{common_cases[0]}_sol.csv",
+        raw_dir / f"{common_cases[0]}.json",
     )
 
     nx = meta_first["geometry"]["nx"]
@@ -375,13 +358,13 @@ def build_batch_dataset(batch_name: str, verbose: bool = False) -> dict:  # noqa
     # Main loop
     # ------------------------------------------------------------------
     pbar = tqdm(
-        total=len(common),
+        total=len(common_cases),
         desc=f"Building {batch_name}",
         unit="file",
         disable=not verbose,
     )
 
-    for name in common:
+    for name in common_cases:
         df, meta = load_case(
             proc_dir / f"{name}_sol.csv",
             raw_dir / f"{name}.json",
@@ -426,7 +409,7 @@ def build_batch_dataset(batch_name: str, verbose: bool = False) -> dict:  # noqa
 
     return {
         "batch_name": batch_name,
-        "n_cases": len(common),
+        "n_cases": len(common_cases),
         "cases_dir": cases_dir,
         "out_batch": out_batch,
         "meta_saved": meta_saved,

@@ -2,22 +2,45 @@
 ===============================================================================
 dataset_base.py
 ===============================================================================
-Base dataset utilities for modular simulation datasets.
+Base dataset utilities for modular simulation datasets with deterministic splitting.
 
-This module defines a generic dataset base class and a helper function
-to create train, validation, and out-of-distribution (OOD) dataloaders
-with consistent normalization based strictly on the full training set.
+Responsibilities:
+  - Generic dataset base class for .pt files
+  - Deterministic train/eval/OOD split creation with explicit indices
+  - Normalizer fitting on train split only (not eval/OOD)
+  - DataLoader construction with deterministic worker seeding
+  - Split indices return for persistence by training layer
+  - Optional split index reuse for resumed/reproduced runs
+
+Design principles:
+  - Split indices must be explicit tensors, not implicit seed-based
+  - Normalizer statistics fitted only on training subset
+  - DataLoaders use explicit torch.Generator for reproducibility
+  - Worker seeding via worker_init_fn for deterministic shuffling
+  - Dataset layer returns split indices; training layer saves them
+  - This module does NOT handle split persistence; training layer does
+
+Phase 3 note:
+  - split_indices are returned as dict for caller to save/reload
+  - normalizer is constructed but NOT saved here (training layer responsibility)
+  - evaluation membership is explicit via saved indices (Phase 6 will consume)
+===============================================================================
 """
 
 from __future__ import annotations
 
-from typing import Any
+import random
+from typing import TYPE_CHECKING, Any
 
+import numpy as np
 import torch
 from neuralop.data.transforms.data_processors import DefaultDataProcessor
 from neuralop.data.transforms.normalizers import UnitGaussianNormalizer
 from torch import Tensor
-from torch.utils.data import DataLoader, Dataset, random_split
+from torch.utils.data import DataLoader, Dataset, Subset, random_split
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 class BaseDataset(Dataset[dict[str, Tensor]]):
@@ -59,6 +82,35 @@ class BaseDataset(Dataset[dict[str, Tensor]]):
         raise NotImplementedError(msg)
 
 
+def _make_worker_init_fn(base_seed: int) -> Callable[[int], None]:
+    """
+    Create a worker_init_fn for deterministic DataLoader worker seeding.
+
+    When num_workers > 0, PyTorch spawns worker processes. Each worker
+    must have its RNG seeded independently but deterministically.
+
+    Parameters
+    ----------
+    base_seed : int
+        Base seed for the worker pool.
+
+    Returns
+    -------
+    callable
+        Function to pass as worker_init_fn to DataLoader.
+
+    """
+
+    def worker_init_fn(worker_id: int) -> None:
+        """Seed the worker's random state."""
+        worker_seed = base_seed + worker_id
+        random.seed(worker_seed)
+        _ = np.random.default_rng(worker_seed)
+        torch.manual_seed(worker_seed)
+
+    return worker_init_fn
+
+
 def create_dataloaders(
     dataset_cls: type[BaseDataset],
     path_train: str,
@@ -69,13 +121,18 @@ def create_dataloaders(
     num_workers: int = 4,
     pin_memory: bool = True,
     persistent_workers: bool = True,
+    split_seed: int = 9,
+    split_indices: dict[str, Tensor] | None = None,
     **kwargs: Any,
-) -> tuple[DataLoader, dict[str, DataLoader], DefaultDataProcessor]:
+) -> tuple[DataLoader, dict[str, DataLoader], DefaultDataProcessor, dict[str, Any]]:
     """
-    Create train, evaluation, and OOD dataloaders with global normalization.
+    Create train, eval, and OOD dataloaders with deterministic splitting.
 
-    The normalization parameters (mean/std) are computed over *all*
-    training samples to ensure stable scaling and reproducible FNO/PINO training.
+    Splitting is performed BEFORE normalizer fitting. Normalizers are fit
+    on the train split only to avoid data leakage.
+
+    Split indices are returned explicitly for the caller to persist.
+    The training layer is responsible for saving split_indices.pt.
 
     Parameters
     ----------
@@ -93,10 +150,18 @@ def create_dataloaders(
         Fraction of OOD samples used for evaluation (default: 0.2).
     num_workers : int, optional
         Number of parallel data loading workers (default: 4).
+        If 0, workers are disabled (useful for strict debugging).
     pin_memory : bool, optional
         Use pinned memory for faster GPU transfer (default: True).
     persistent_workers : bool, optional
         Keep workers alive between epochs (default: True).
+        Only enabled if num_workers > 0.
+    split_seed : int, optional
+        Random seed for split generation (default: 9).
+    split_indices : dict[str, Tensor] | None, optional
+        Pre-computed split indices to reuse. If provided, splits are not
+        regenerated. Expected keys: "train_indices", "eval_indices",
+        "ood_indices". If None, splits are generated deterministically.
     **kwargs : Any
         Additional keyword arguments passed to the dataset class.
 
@@ -106,32 +171,117 @@ def create_dataloaders(
         Tuple containing:
             - train_loader: DataLoader for the training subset.
             - test_loaders: Dict with "eval" and "ood" DataLoaders.
-            - data_processor: Normalization processor using train mean/std.
+            - data_processor: Normalizer fitted on train split only.
+            - split_info: Dict with split indices and metadata for persistence.
+
+    Notes
+    -----
+    The split_info dict contains:
+        - "train_indices": Tensor of training set indices
+        - "eval_indices": Tensor of evaluation set indices
+        - "ood_indices": Tensor of OOD set indices
+        - "metadata": Dict with dataset name, sample counts, etc.
+
+    The training layer should save this dict using torch.save(split_info, path).
 
     """
-    # ----------------------------------------------------------------------
-    # Load full training data (for splitting and global normalization)
-    # ----------------------------------------------------------------------
-    full_train = dataset_cls(path_train, **kwargs)
-    n_train = int(train_ratio * len(full_train))
-    n_eval = len(full_train) - n_train
+    # Validate num_workers and persistent_workers
+    if num_workers == 0:
+        persistent_workers = False
+    if num_workers > 0 and persistent_workers is None:
+        persistent_workers = True
 
-    train_set, eval_set = random_split(
-        full_train,
-        [n_train, n_eval],
-        generator=torch.Generator().manual_seed(9),
+    # Load full training dataset
+    full_train = dataset_cls(path_train, **kwargs)
+    n_train_full = len(full_train)
+    n_train = int(train_ratio * n_train_full)
+    n_eval = n_train_full - n_train
+
+    # Generate or reuse split indices
+    if split_indices is None:
+        # Create splits deterministically
+        train_set, eval_set = random_split(
+            full_train,
+            [n_train, n_eval],
+            generator=torch.Generator().manual_seed(split_seed),
+        )
+        # Extract indices from Subset objects
+        train_indices = torch.tensor(train_set.indices, dtype=torch.long)
+        eval_indices = torch.tensor(eval_set.indices, dtype=torch.long)
+    else:
+        # Reuse provided indices
+        train_indices = split_indices["train_indices"]
+        eval_indices = split_indices["eval_indices"]
+        train_set = Subset(full_train, train_indices.tolist())
+        eval_set = Subset(full_train, eval_indices.tolist())
+
+    # Load full OOD dataset
+    ood_full = dataset_cls(path_test_ood, **kwargs)
+    n_ood_full = len(ood_full)
+    n_ood = int(ood_fraction * n_ood_full)
+
+    if split_indices is None:
+        # Create OOD split deterministically
+        ood_subset, _ = random_split(
+            ood_full,
+            [n_ood, n_ood_full - n_ood],
+            generator=torch.Generator().manual_seed(split_seed),
+        )
+        ood_indices = torch.tensor(ood_subset.indices, dtype=torch.long)
+    else:
+        # Reuse provided OOD indices
+        ood_indices = split_indices["ood_indices"]
+        ood_subset = Subset(ood_full, ood_indices.tolist())
+
+    # ========================================================================
+    # Phase 3: Fit normalizers on TRAIN split only (after split, before eval)
+    # ========================================================================
+    xs_train: list[Tensor] = []
+    ys_train: list[Tensor] = []
+
+    train_loader_for_norm = DataLoader(
+        train_set,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=0,
+        pin_memory=False,
     )
 
-    # ----------------------------------------------------------------------
-    # Build loaders
-    # ----------------------------------------------------------------------
+    for batch in train_loader_for_norm:
+        xs_train.append(batch["x"])
+        ys_train.append(batch["y"])
+
+    x_train = torch.cat(xs_train, dim=0)  # [N_train, C, H, W]
+    y_train = torch.cat(ys_train, dim=0)
+
+    # Normalizers fitted on train split only
+    in_norm = UnitGaussianNormalizer(dim=[0, 2, 3])
+    in_norm.fit(x_train)
+
+    out_norm = UnitGaussianNormalizer(dim=[0, 2, 3])
+    out_norm.fit(y_train)
+
+    data_processor = DefaultDataProcessor(
+        in_normalizer=in_norm,
+        out_normalizer=out_norm,
+    )
+
+    # ========================================================================
+    # Create dataloaders with explicit generator seeding
+    # ========================================================================
+    generator = torch.Generator().manual_seed(split_seed)
+
+    worker_init = _make_worker_init_fn(split_seed) if num_workers > 0 else None
+
     train_loader = DataLoader(
         train_set,
         batch_size=batch_size,
         shuffle=True,
+        generator=generator,
         num_workers=num_workers,
         pin_memory=pin_memory,
         persistent_workers=persistent_workers,
+        worker_init_fn=worker_init,
         drop_last=True,
     )
 
@@ -144,18 +294,6 @@ def create_dataloaders(
         persistent_workers=False,
     )
 
-    # ----------------------------------------------------------------------
-    # Out-of-distribution loader
-    # ----------------------------------------------------------------------
-    ood_full = dataset_cls(path_test_ood, **kwargs)
-    n_ood = int(ood_fraction * len(ood_full))
-
-    ood_subset, _ = random_split(
-        ood_full,
-        [n_ood, len(ood_full) - n_ood],
-        generator=torch.Generator().manual_seed(9),
-    )
-
     ood_loader = DataLoader(
         ood_subset,
         batch_size=batch_size,
@@ -165,39 +303,28 @@ def create_dataloaders(
         persistent_workers=False,
     )
 
-    xs: list[Tensor] = []
-    ys: list[Tensor] = []
-
-    full_train_loader = DataLoader(
-        full_train,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=0,
-        pin_memory=False,
-    )
-
-    for batch in full_train_loader:
-        xs.append(batch["x"])
-        ys.append(batch["y"])
-
-    x_all = torch.cat(xs, dim=0)  # [N, C, H, W]
-    y_all = torch.cat(ys, dim=0)
-
-    # Normalizer based on the entire training dataset
-    in_norm = UnitGaussianNormalizer(dim=[0, 2, 3])
-    in_norm.fit(x_all)
-
-    out_norm = UnitGaussianNormalizer(dim=[0, 2, 3])
-    out_norm.fit(y_all)
-
-    data_processor = DefaultDataProcessor(
-        in_normalizer=in_norm,
-        out_normalizer=out_norm,
-    )
-
     test_loaders = {
         "eval": eval_loader,
         "ood": ood_loader,
     }
 
-    return train_loader, test_loaders, data_processor
+    # Split info for persistence
+    split_info = {
+        "train_indices": train_indices,
+        "eval_indices": eval_indices,
+        "ood_indices": ood_indices,
+        "metadata": {
+            "train_dataset": path_train,
+            "ood_dataset": path_test_ood,
+            "n_train_full": n_train_full,
+            "n_train": len(train_indices),
+            "n_eval": len(eval_indices),
+            "n_ood_full": n_ood_full,
+            "n_ood": len(ood_indices),
+            "train_ratio": train_ratio,
+            "ood_fraction": ood_fraction,
+            "split_seed": split_seed,
+        },
+    }
+
+    return train_loader, test_loaders, data_processor, split_info

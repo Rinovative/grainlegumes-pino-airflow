@@ -2,20 +2,16 @@
 
 from pathlib import Path
 
+from src import common
+
 # ==============================
 # Project root and data paths
 # ==============================
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-DATA_PROCESSED = PROJECT_ROOT / "model_training" / "data_temp"
-TRAIN_DATA_RAW = PROJECT_ROOT / "model_training" / "data" / "raw"
-
-# ==== TEMPORARY: DOCKER-GPU NOT AVAILABLE ========================
-# ==== TEMPORARY: DOCKER-GPU NOT AVAILABLE ========================
-TMP_ROOT = Path("/home/rino.albertin/workspace/tmp_data/temp_data_training")
-TRAIN_DATA_RAW = TMP_ROOT / "temp_data" / "temp_raw"
-# ==== TEMPORARY: DOCKER-GPU NOT AVAILABLE ========================
-# ==== TEMPORARY: DOCKER-GPU NOT AVAILABLE ========================
+# Data paths resolved through common.paths for reproducibility
+DATA_PROCESSED = common.paths.get_train_root() / "runs"
+TRAIN_DATA_RAW = common.paths.get_train_root()
 
 
 # ==============================

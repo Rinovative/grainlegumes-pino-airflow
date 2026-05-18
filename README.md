@@ -93,7 +93,7 @@ Full project report, including methodology, model formulation, and detailed eval
 
 <p align="center">
 <em>
-Representative qualitative comparison of pressure-field predictions for supervised and physics-informed neural-operator variants against the CFD reference solution. The figure illustrates differences in large-scale pressure structure, local deviations and physical consistency between FNO, U-NO and their physics-informed variants.
+Representative qualitative comparison of pressure-field predictions on a challenging outlier case for supervised and physics-informed neural-operator variants against the CFD reference solution. The figure illustrates differences in large-scale pressure structure, local deviations and physical consistency between FNO, U-NO and their physics-informed variants.
 </em>
 </p>
 

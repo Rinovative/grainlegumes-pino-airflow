@@ -22,11 +22,10 @@ This script:
 """
 
 import shutil
-from pathlib import Path
 
 import numpy as np
 import torch
-from src import domain
+from src import common, domain
 from tqdm import tqdm
 
 
@@ -58,29 +57,11 @@ def merge_batch_cases(
 
     """
     log = []
-
     # ------------------------------------------------------------------
-    # Project root (grainlegumes-pino)
+    # Data roots resolved through common.paths
     # ------------------------------------------------------------------
-    PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-    # ------------------------------------------------------------------
-    # Data roots (default = repo layout)
-    # ------------------------------------------------------------------
-    DATA_RAW = PROJECT_ROOT / "data" / "raw"
-    MODEL_DATA_RAW = PROJECT_ROOT / "model_training" / "data" / "raw"
-
-    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
-    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
-    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
-    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
-    TMP_ROOT = Path("/home/rino.albertin/workspace/tmp_data")
-    DATA_RAW = TMP_ROOT / "temp_data" / "temp_raw"
-    MODEL_DATA_RAW = TMP_ROOT / "temp_data_training" / "temp_data" / "temp_raw"
-    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
-    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
-    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
-    # ==== TEMPORARY: DOCKER/GPU NOT AVAILABLE ========================
+    DATA_RAW = common.paths.get_train_root()
+    MODEL_DATA_RAW = common.paths.get_train_root()
 
     # ------------------------------------------------------------------
     # Batch paths

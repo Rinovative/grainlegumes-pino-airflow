@@ -67,3 +67,88 @@ def get_gen_root() -> Path:
     if root:
         return Path(root)
     return get_storage_root() / "data_generation"
+
+
+def resolve_dataset_path(dataset_name: str, task: str | None = None) -> Path:
+    """
+    Resolve a dataset name to its physical path.
+
+    For training datasets, the dataset is located under TRAIN_ROOT.
+    For shared/raw datasets, the dataset is located under DATA_ROOT.
+
+    Parameters
+    ----------
+    dataset_name : str
+        Logical name of the dataset (e.g., "lhs_var80_seed3001")
+    task : str | None
+        Optional task name to help locate the dataset. If provided,
+        the dataset is searched under TRAIN_ROOT / <task> / <dataset_name>.
+
+    Returns
+    -------
+    Path
+        Physical path to the dataset directory.
+
+    """
+    if task:
+        return get_train_root() / task / dataset_name
+    return get_train_root() / dataset_name
+
+
+def resolve_run_output_dir(task: str, run_name: str) -> Path:
+    """
+    Resolve a run output directory path.
+
+    Run outputs are stored under TRAIN_ROOT / <task> / runs / <run_name>
+    or similar convention managed by the training orchestration layer.
+
+    Parameters
+    ----------
+    task : str
+        Task name (e.g., "steady_flow")
+    run_name : str
+        Run name (e.g., "fno_m128x160_h64_l3_s9")
+
+    Returns
+    -------
+    Path
+        Physical path to the run output directory.
+
+    """
+    return get_train_root() / task / "runs" / run_name
+
+
+def resolve_split_indices_path(run_dir: Path | str) -> Path:
+    """
+    Resolve the split indices file path within a run directory.
+
+    Parameters
+    ----------
+    run_dir : Path | str
+        Run output directory path.
+
+    Returns
+    -------
+    Path
+        Path to split_indices.pt file.
+
+    """
+    return Path(run_dir) / "split_indices.pt"
+
+
+def resolve_normalizer_path(run_dir: Path | str) -> Path:
+    """
+    Resolve the normalizer state file path within a run directory.
+
+    Parameters
+    ----------
+    run_dir : Path | str
+        Run output directory path.
+
+    Returns
+    -------
+    Path
+        Path to normalizer.pt file.
+
+    """
+    return Path(run_dir) / "normalizer.pt"

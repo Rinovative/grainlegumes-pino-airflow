@@ -1,13 +1,7 @@
 """
 ===============================================================================
- split_batch_to_cases.
+ split_batch_to_cases.py
 ===============================================================================
-Author:  Rino M. Albertin
-Date:    2026-01-09
-Project: GrainLegumes_PINO_project
-
-DESCRIPTION
------------
 Splits a merged <batch_name>.pt dataset back into individual case_XXXX.pt files.
 
 Input dataset contains:
@@ -25,11 +19,10 @@ This script:
            }
     4. Saves each case as case_XXXX.pt into data/raw/<batch_name>/cases
 ===============================================================================
-"""  # noqa: D205
-
-from pathlib import Path
+"""
 
 import torch
+from src import common
 from tqdm import tqdm
 
 
@@ -57,11 +50,9 @@ def split_batch_to_cases(
 
     """
     log = []
-
-    base_root = Path(__file__).resolve().parents[2]
-
-    src_dataset_path = base_root / "model_training" / "data" / "raw" / batch_name / f"{batch_name}.pt"
-    dst_cases_dir = base_root / "data" / "raw" / batch_name / "cases"
+    # Training datasets are in TRAIN_ROOT
+    src_dataset_path = common.paths.get_train_root() / batch_name / f"{batch_name}.pt"
+    dst_cases_dir = common.paths.get_data_root() / batch_name / "cases"
     dst_cases_dir.mkdir(parents=True, exist_ok=True)
 
     if not src_dataset_path.exists():

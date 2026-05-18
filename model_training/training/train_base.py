@@ -333,7 +333,7 @@ def train_base(
         "persistent_workers": CONFIG["persistent_workers"],
     }
 
-    train_loader, test_loaders, data_processor = datasets.base.create_dataloaders(
+    train_loader, test_loaders, data_processor, split_info = datasets.base.create_dataloaders(
         dataset_cls=datasets.simulation.PhysicsDataset,
         path_train=str(train_dataset),
         path_test_ood=str(ood_dataset),
@@ -343,6 +343,10 @@ def train_base(
     )
 
     data_processor = data_processor.to(device)
+
+    # Save split indices for reproducible evaluation and analysis
+    split_indices_path = save_dir / "split_indices.pt"
+    torch.save(split_info, split_indices_path)
 
     # Save normalizer for inference
     normalizer_path = save_dir / "normalizer.pt"
