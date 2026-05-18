@@ -1,3 +1,24 @@
-from . import analysis, eda, util  # noqa: D104
+"""
+Project source code organization.
 
-__all__ = ["analysis", "eda", "util"]
+Core modules: common, domain, data, learning, analysis, experiments.
+Legacy modules (in transition): eda, util.
+"""
+
+from . import (
+    analysis,
+    common,
+    data,
+    domain,
+    experiments,
+    learning,
+)
+
+__all__ = [
+    "analysis",
+    "common",
+    "data",
+    "domain",
+    "experiments",
+    "learning",
+]
