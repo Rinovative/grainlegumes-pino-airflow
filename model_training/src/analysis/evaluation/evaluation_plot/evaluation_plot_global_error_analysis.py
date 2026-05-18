@@ -16,8 +16,7 @@ from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from scipy.stats import gaussian_kde
 
-from src import util
-from src.schema.schema_fields import OUTPUT_FIELDS
+from src import domain, util
 
 if TYPE_CHECKING:
     import ipywidgets as widgets
@@ -30,7 +29,7 @@ if TYPE_CHECKING:
 # GLOBAL OUTPUT CHANNEL CONFIGURATION (schema-derived)
 # =============================================================================
 
-CHANNELS = OUTPUT_FIELDS
+CHANNELS = domain.fields.OUTPUT_FIELDS
 CHANNEL_INDICES = {name: i for i, name in enumerate(CHANNELS)}
 
 # =============================================================================

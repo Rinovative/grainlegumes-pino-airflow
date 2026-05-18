@@ -1,12 +1,7 @@
 """
 ===============================================================================
- schema_kappa.
+ domain_permeability.py
 ===============================================================================
-Author:  Rino M. Albertin
-Project: GrainLegumes_PINO_project
-
-DESCRIPTION
------------
 Single source of truth for permeability tensor (kappa) handling.
 
 Defines:
@@ -19,7 +14,7 @@ Defines:
 This module contains NO torch / numpy code.
 It only defines names, order, and mapping logic.
 ===============================================================================
-"""  # noqa: D205
+"""
 
 from __future__ import annotations
 

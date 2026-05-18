@@ -16,8 +16,7 @@ import pandas as pd
 from IPython.display import Markdown, display
 from matplotlib import cm
 
-from src import util
-from src.schema.schema_fields import OUTPUT_FIELDS
+from src import domain, util
 
 if TYPE_CHECKING:
     from matplotlib.figure import Figure
@@ -25,7 +24,7 @@ if TYPE_CHECKING:
 # =============================================================================
 # CHANNELS AND UNITS
 # =============================================================================
-CHANNELS = OUTPUT_FIELDS
+CHANNELS = domain.fields.OUTPUT_FIELDS
 CHANNEL_INDICES = {name: i for i, name in enumerate(CHANNELS)}
 UNIT_MAP = {
     "p": "Pa",

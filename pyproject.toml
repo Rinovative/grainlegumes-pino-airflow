@@ -73,6 +73,9 @@ ignore = [
   "EXE002",  # Ignore executable-bit mismatch
   "T201",  # Allow print statements
   "ERA001",  # Allow commented-out code during research cleanup
+  "D205", # Allow multi-line docstring summary to be on a separate line
+  "D400", # Allow the first line to not end with a period
+  "D415" # Allow the first line to not end with a period, question mark, or exclamation point
 ]
 fixable = ["ALL"]
 

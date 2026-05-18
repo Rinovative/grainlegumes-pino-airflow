@@ -1,14 +1,14 @@
 """
 Project source code organization.
 
-Core modules: common, domain, data, learning, analysis, experiments.
+Core modules: common, domain, datasets, learning, analysis, experiments.
 Legacy modules (in transition): eda, util.
 """
 
 from . import (
     analysis,
     common,
-    data,
+    datasets,
     domain,
     experiments,
     learning,
@@ -17,7 +17,7 @@ from . import (
 __all__ = [
     "analysis",
     "common",
-    "data",
+    "datasets",
     "domain",
     "experiments",
     "learning",

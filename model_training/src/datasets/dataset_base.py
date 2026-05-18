@@ -1,4 +1,7 @@
 """
+===============================================================================
+dataset_base.py
+===============================================================================
 Base dataset utilities for modular simulation datasets.
 
 This module defines a generic dataset base class and a helper function
@@ -29,8 +32,10 @@ class BaseDataset(Dataset[dict[str, Tensor]]):
         """
         Load the dataset from a serialized PyTorch file.
 
-        Args:
-            data_path: Path to a `.pt` file containing simulation data.
+        Parameters
+        ----------
+        data_path : str
+            Path to a `.pt` file containing simulation data.
 
         """
         self.data = torch.load(data_path)
@@ -72,19 +77,32 @@ def create_dataloaders(
     The normalization parameters (mean/std) are computed over *all*
     training samples to ensure stable scaling and reproducible FNO/PINO training.
 
-    Args:
-        dataset_cls: Dataset class to instantiate.
-        path_train: Path to the in-distribution training dataset `.pt` file.
-        path_test_ood: Path to the out-of-distribution dataset `.pt` file.
-        batch_size: Batch size for all dataloaders.
-        train_ratio: Fraction of training samples used for training.
-        ood_fraction: Fraction of OOD samples used for evaluation.
-        num_workers: Number of parallel data loading workers.
-        pin_memory: Use pinned memory for faster GPU transfer.
-        persistent_workers: Keep workers alive between epochs.
-        **kwargs: Additional keyword arguments passed to the dataset class.
+    Parameters
+    ----------
+    dataset_cls : type[BaseDataset]
+        Dataset class to instantiate.
+    path_train : str
+        Path to the in-distribution training dataset `.pt` file.
+    path_test_ood : str
+        Path to the out-of-distribution dataset `.pt` file.
+    batch_size : int, optional
+        Batch size for all dataloaders (default: 16).
+    train_ratio : float, optional
+        Fraction of training samples used for training (default: 0.8).
+    ood_fraction : float, optional
+        Fraction of OOD samples used for evaluation (default: 0.2).
+    num_workers : int, optional
+        Number of parallel data loading workers (default: 4).
+    pin_memory : bool, optional
+        Use pinned memory for faster GPU transfer (default: True).
+    persistent_workers : bool, optional
+        Keep workers alive between epochs (default: True).
+    **kwargs : Any
+        Additional keyword arguments passed to the dataset class.
 
-    Returns:
+    Returns
+    -------
+    tuple
         Tuple containing:
             - train_loader: DataLoader for the training subset.
             - test_loaders: Dict with "eval" and "ood" DataLoaders.

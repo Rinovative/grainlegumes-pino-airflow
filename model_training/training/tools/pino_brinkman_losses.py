@@ -1,4 +1,7 @@
 """
+===============================================================================
+pino_brinkman_losses.py
+===============================================================================
 Single entry-point for Brinkman PINO losses.
 
 Public API (4 losses):
@@ -42,7 +45,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import torch
 import wandb
-from src.schema.schema_training import DEFAULT_INPUTS_2D, DEFAULT_OUTPUTS_2D
+from src import domain
 from torch import nn
 
 if TYPE_CHECKING:
@@ -244,8 +247,8 @@ class _PINOBrinkmanLossBase(nn.Module):
         self._kxy_hat_clip = float(kxy_hat_clip)
         self._det_hat_min = float(det_hat_min)
 
-        self.input_fields = DEFAULT_INPUTS_2D
-        self.output_fields = DEFAULT_OUTPUTS_2D
+        self.input_fields = domain.field_sets.DEFAULT_INPUTS_2D
+        self.output_fields = domain.field_sets.DEFAULT_OUTPUTS_2D
         self.iidx = {n: i for i, n in enumerate(self.input_fields)}
         self.oidx = {n: i for i, n in enumerate(self.output_fields)}
 

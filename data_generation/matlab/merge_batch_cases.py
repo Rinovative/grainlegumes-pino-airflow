@@ -1,13 +1,7 @@
 """
 ===============================================================================
- merge_batch_cases.
+ merge_batch_cases.py
 ===============================================================================
-Author:  Rino M. Albertin
-Date:    2025-10-28
-Project: GrainLegumes_PINO_project
-
-DESCRIPTION
------------
 Merges all individual case_XXXX.pt files of a simulation batch into a single
 training dataset file for PINO/FNO.
 
@@ -25,14 +19,14 @@ This script:
     4. Saves a single <batch_name>.pt dataset for model_training.
     5. Copies meta.pt into the dataset folder if available.
 ===============================================================================
-"""  # noqa: D205
+"""
 
 import shutil
 from pathlib import Path
 
 import numpy as np
 import torch
-from src.schema.schema_training import default_training_inputs, default_training_outputs
+from src import domain
 from tqdm import tqdm
 
 
@@ -128,10 +122,10 @@ def merge_batch_cases(
         raise RuntimeError(msg)
 
     if keep_input_fields is None:
-        keep_input_fields = default_training_inputs(dim)
+        keep_input_fields = domain.field_sets.default_training_inputs(dim)
 
     if keep_output_fields is None:
-        keep_output_fields = default_training_outputs(dim)
+        keep_output_fields = domain.field_sets.default_training_outputs(dim)
 
     # ------------------------------------------------------------------
     # Determine training schema (dimension + fields)

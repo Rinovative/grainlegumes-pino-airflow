@@ -2,7 +2,7 @@
 Physical consistency plots for PINO/FNO evaluation.
 
 This module is INDEPENDENT of model architecture (FNO / PINO / UNO)
-and uses canonical field names defined elsewhere (after kappa_schema + build_batch_dataset).
+and uses canonical field names defined after domain.permeability mapping and batch dataset construction.
 """
 
 from __future__ import annotations

@@ -1,4 +1,7 @@
 """
+===============================================================================
+dataset_simulation.py
+===============================================================================
 Dataset definition for simulation-based PINO/FNO training and evaluation.
 
 This module implements the PhysicsDataset, which combines
@@ -28,8 +31,8 @@ from typing import TYPE_CHECKING, Any
 
 import torch
 
-from src.dataset.dataset_base import BaseDataset
-from src.dataset.dataset_module.dataset_module_flow import FlowModule
+from src.datasets.dataset_base import BaseDataset
+from src.datasets.dataset_modules.dataset_module_flow import FlowModule
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -86,18 +89,19 @@ class PhysicsDataset(BaseDataset):
         include_outputs: list[str] | None = None,
     ) -> None:
         """
-        Initialise dataset from either a merged `.pt` file or a case directory.
+        Initialize dataset from either a merged `.pt` file or a case directory.
 
-        Args:
-            data_path:
-                Path to a merged dataset file (`<batch_name>.pt`) or to a
-                directory containing `case_XXXX.pt` files.
-            include_inputs:
-                Optional list of input channel names to include in x.
-                If None, all available input channels are used.
-            include_outputs:
-                Optional list of output channel names to include in y.
-                If None, all available output channels are used.
+        Parameters
+        ----------
+        data_path : str
+            Path to a merged dataset file (`<batch_name>.pt`) or to a
+            directory containing `case_XXXX.pt` files.
+        include_inputs : list[str] | None, optional
+            Optional list of input channel names to include in x.
+            If None, all available input channels are used (default: None).
+        include_outputs : list[str] | None, optional
+            Optional list of output channel names to include in y.
+            If None, all available output channels are used (default: None).
 
         """
         path = Path(data_path)
@@ -145,7 +149,9 @@ class PhysicsDataset(BaseDataset):
         """
         Return the number of samples in the dataset.
 
-        Returns:
+        Returns
+        -------
+        int
             Number of samples:
                 - For merged mode: N (first dimension of "inputs")
                 - For cases mode:  number of `case_XXXX.pt` files
@@ -169,12 +175,15 @@ class PhysicsDataset(BaseDataset):
 
         A shallow copy of the metadata is returned under "meta".
 
-        Args:
-            idx:
-                Case index in the sorted list of `case_XXXX.pt` files.
+        Parameters
+        ----------
+        idx : int
+            Case index in the sorted list of `case_XXXX.pt` files.
 
-        Returns:
-            dict with keys:
+        Returns
+        -------
+        dict[str, Any]
+            Dictionary with keys:
                 - "x":    Tensor [C_in, H, W]
                 - "y":    Tensor [C_out, H, W]
                 - "meta": dict with case metadata
@@ -220,11 +229,14 @@ class PhysicsDataset(BaseDataset):
                     "meta": dict,
                 }
 
-        Args:
-            idx:
-                Sample index (0-based).
+        Parameters
+        ----------
+        idx : int
+            Sample index (0-based).
 
-        Returns:
+        Returns
+        -------
+        dict[str, Any]
             Sample dictionary with model-ready tensors and optional metadata.
 
         """

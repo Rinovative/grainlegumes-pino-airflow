@@ -1,4 +1,7 @@
 """
+===============================================================================
+train_base.py
+===============================================================================
 Model training pipeline with dataset creation, trainer setup, and logging.
 
 This module defines the `train_base` function which orchestrates the entire
@@ -18,7 +21,7 @@ import numpy as np
 import torch
 import wandb
 from neuralop import Trainer
-from src import dataset
+from src import datasets
 from src.util.util_metrics import RMSEChannelPhysical
 
 from training import (
@@ -330,8 +333,8 @@ def train_base(
         "persistent_workers": CONFIG["persistent_workers"],
     }
 
-    train_loader, test_loaders, data_processor = dataset.dataset_base.create_dataloaders(
-        dataset_cls=dataset.dataset_simulation.PhysicsDataset,
+    train_loader, test_loaders, data_processor = datasets.base.create_dataloaders(
+        dataset_cls=datasets.simulation.PhysicsDataset,
         path_train=str(train_dataset),
         path_test_ood=str(ood_dataset),
         train_ratio=CONFIG["train_ratio"],

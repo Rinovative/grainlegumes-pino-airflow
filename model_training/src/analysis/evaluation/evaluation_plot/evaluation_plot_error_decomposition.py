@@ -16,8 +16,7 @@ import ipywidgets as widgets
 import matplotlib.pyplot as plt
 import numpy as np
 
-from src import util
-from src.schema.schema_fields import OUTPUT_FIELDS
+from src import domain, util
 
 if TYPE_CHECKING:
     import ipywidgets as widgets
@@ -29,7 +28,7 @@ if TYPE_CHECKING:
 # ============================================================================
 # CHANNEL DEFINITIONS
 # ============================================================================
-CHANNELS = OUTPUT_FIELDS
+CHANNELS = domain.fields.OUTPUT_FIELDS
 CHANNEL_INDICES = {name: i for i, name in enumerate(CHANNELS)}
 
 # =============================================================================

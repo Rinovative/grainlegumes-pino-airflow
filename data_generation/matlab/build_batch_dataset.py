@@ -1,13 +1,7 @@
 """
 ===============================================================================
- build_batch_dataset.
+ build_batch_dataset.py
 ===============================================================================
-Author:  Rino M. Albertin
-Date:    2025-10-28
-Project: GrainLegumes_PINO_project
-
-DESCRIPTION
------------
 Reads raw COMSOL simulation outputs and converts them into structured PyTorch
 `.pt` case files for PINO/FNO training and evaluation.
 
@@ -35,7 +29,7 @@ Values are zero everywhere except on the prescribed boundary.
 This encoding is intentional to keep a purely field-based PINO input.
 ===============================================================================
 
-"""  # noqa: D205
+"""
 
 import json
 from pathlib import Path
@@ -44,8 +38,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import torch
-from src.schema.schema_fields import COORD_FIELDS, OUTPUT_FIELDS, SCALAR_INPUT_FIELDS
-from src.schema.schema_kappa import resolve_internal_to_present_sources
+from src import domain
 from tqdm import tqdm
 
 # =============================================================================
@@ -255,7 +248,7 @@ def build_batch_dataset(batch_name: str, verbose: bool = False) -> dict:  # noqa
         # --------------------------------------------------------------
         # Coordinates
         # --------------------------------------------------------------
-        for c in COORD_FIELDS:
+        for c in domain.fields.COORD_FIELDS:
             if c in df.columns:
                 input_fields[c] = df[c].to_numpy().reshape(ny, nx)
 
@@ -296,7 +289,7 @@ def build_batch_dataset(batch_name: str, verbose: bool = False) -> dict:  # noqa
         # - dimensionality (2D vs 3D)
         # - canonical internal component order
         # - mapping from internal components to COMSOL sources
-        kappa_mapping = resolve_internal_to_present_sources(available_kappa, nonzero_kappa)
+        kappa_mapping = domain.permeability.resolve_internal_to_present_sources(available_kappa, nonzero_kappa)
 
         if not kappa_mapping:
             msg = "No permeability components found in dataset"
@@ -328,7 +321,7 @@ def build_batch_dataset(batch_name: str, verbose: bool = False) -> dict:  # noqa
         # --------------------------------------------------------------
         # Scalar input fields (eps, p_bc)
         # --------------------------------------------------------------
-        for internal, col in SCALAR_INPUT_FIELDS.items():
+        for internal, col in domain.fields.SCALAR_INPUT_FIELDS.items():
             if col not in df.columns:
                 msg = f"Missing required input field '{col}'"
                 raise KeyError(msg)
@@ -337,7 +330,7 @@ def build_batch_dataset(batch_name: str, verbose: bool = False) -> dict:  # noqa
         # --------------------------------------------------------------
         # Outputs
         # --------------------------------------------------------------
-        for name in OUTPUT_FIELDS:
+        for name in domain.fields.OUTPUT_FIELDS:
             if name not in df.columns:
                 msg = f"Missing required output field '{name}'"
                 raise KeyError(msg)

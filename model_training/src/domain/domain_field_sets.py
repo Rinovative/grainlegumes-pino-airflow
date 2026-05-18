@@ -1,13 +1,8 @@
 """
 ===============================================================================
- schema_training.
+ domain_field_sets.py
 ===============================================================================
-Author:  Rino M. Albertin
-Project: GrainLegumes_PINO_project
-
-DESCRIPTION
------------
-Training schema defining which fields are used as model inputs and outputs.
+Training field sets defining which fields are used as model inputs and outputs.
 
 This module defines:
   - default input channel selections for training
@@ -23,7 +18,7 @@ Design principles:
 This module answers ONLY:
   "Which fields does the model see during training?"
 ===============================================================================
-"""  # noqa: D205
+"""
 
 from __future__ import annotations
 
@@ -31,7 +26,7 @@ from __future__ import annotations
 # Default training inputs
 # ---------------------------------------------------------------------
 # These are INTERNAL, CANONICAL field names
-# (after kappa_schema + build_batch_dataset)
+# (after domain.permeability mapping and batch dataset construction)
 # ---------------------------------------------------------------------
 
 DEFAULT_INPUTS_2D = [

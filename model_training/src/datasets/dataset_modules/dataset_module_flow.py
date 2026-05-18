@@ -1,4 +1,7 @@
 """
+===============================================================================
+dataset_module_flow.py
+===============================================================================
 FlowModule for PINO/FNO datasets (merged + single-case).
 
 This class provides a unified interface for loading flow-related
@@ -57,7 +60,7 @@ from typing import Any
 
 import torch
 
-from src.schema.schema_training import default_training_inputs, default_training_outputs
+from src import domain
 
 
 class FlowModule:
@@ -133,8 +136,8 @@ class FlowModule:
             dim = 3 if {"kxx", "kyy", "kzz"}.issubset(available_inputs) else 2
 
             # --- Kanonische Reihenfolge aus Schema ---
-            input_names = default_training_inputs(dim)
-            output_names = default_training_outputs(dim)
+            input_names = domain.field_sets.default_training_inputs(dim)
+            output_names = domain.field_sets.default_training_outputs(dim)
 
             # --- Safety: nur vorhandene Felder ---
             input_names = [k for k in input_names if k in input_dict]

@@ -1,4 +1,7 @@
 """
+===============================================================================
+analysis_interference.py
+===============================================================================
 Inference utilities for PINO and FNO model evaluation.
 
 This module reconstructs a complete, deterministic inference environment
@@ -43,8 +46,8 @@ from torch import nn
 from torch.utils.data import DataLoader, Dataset
 from training.train_uno import UNOWithCheckpoint
 
-from src.dataset.dataset_simulation import PhysicsDataset
-from src.schema.schema_training import DEFAULT_INPUTS_2D, DEFAULT_OUTPUTS_2D
+from src import domain
+from src.datasets.dataset_simulation import PhysicsDataset
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -53,8 +56,8 @@ if TYPE_CHECKING:
 # CHANNEL CONFIGURATION
 # ======================================================================
 
-INPUT_CHANNELS = DEFAULT_INPUTS_2D
-OUTPUT_CHANNELS = DEFAULT_OUTPUTS_2D
+INPUT_CHANNELS = domain.field_sets.DEFAULT_INPUTS_2D
+OUTPUT_CHANNELS = domain.field_sets.DEFAULT_OUTPUTS_2D
 
 
 # ======================================================================

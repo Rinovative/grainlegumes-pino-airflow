@@ -1,4 +1,7 @@
 """
+===============================================================================
+pino_loss_spectral.py
+===============================================================================
 PINO loss for 2D stationary incompressible Brinkman flow (minimal + stable edges).
 
 - data loss + physics residual loss + pressure-BC loss
@@ -37,7 +40,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import torch
 import wandb
-from src.schema.schema_training import DEFAULT_INPUTS_2D, DEFAULT_OUTPUTS_2D
+from src import domain
 from torch import nn
 
 if TYPE_CHECKING:
@@ -347,8 +350,8 @@ class PINOSpectralLoss(nn.Module):
         self._kxy_hat_clip = 0.999
 
         # field order from schema
-        self.input_fields = DEFAULT_INPUTS_2D
-        self.output_fields = DEFAULT_OUTPUTS_2D
+        self.input_fields = domain.field_sets.DEFAULT_INPUTS_2D
+        self.output_fields = domain.field_sets.DEFAULT_OUTPUTS_2D
         self.iidx = {n: i for i, n in enumerate(self.input_fields)}
         self.oidx = {n: i for i, n in enumerate(self.output_fields)}
 

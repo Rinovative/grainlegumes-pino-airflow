@@ -1,4 +1,7 @@
 """
+===============================================================================
+pino_loss_physical.py
+===============================================================================
 Physics-Informed Physical-Space Loss for Stationary Brinkman Flow with conservative mass conservation.
 
 Implements the PINO loss function consistent with COMSOL's formulation
@@ -16,7 +19,7 @@ from typing import Any
 
 import torch
 import wandb
-from src.schema.schema_training import DEFAULT_INPUTS_2D, DEFAULT_OUTPUTS_2D
+from src import domain
 from torch import nn
 
 # ================================================================
@@ -142,8 +145,8 @@ class PINOPhysicalLoss(nn.Module):
         """
         super().__init__()
 
-        self.input_fields = DEFAULT_INPUTS_2D
-        self.output_fields = DEFAULT_OUTPUTS_2D
+        self.input_fields = domain.field_sets.DEFAULT_INPUTS_2D
+        self.output_fields = domain.field_sets.DEFAULT_OUTPUTS_2D
         self.data_loss = data_loss
         self.lambda_phys = lambda_phys
         self.lambda_p = lambda_p

@@ -1,12 +1,15 @@
 """
+===============================================================================
+ common_paths.py
+===============================================================================
 Central path resolver for the project.
 
-Handles:
-- Reading PROJECT_ROOT, STORAGE_ROOT, DATA_ROOT, GEN_ROOT and TRAIN_ROOT
-- Providing stable repo-relative and storage-relative paths
-- Resolving dataset names to dataset directories
-- Resolving run output directories
-- Ensuring Docker, notebook and cluster execution consistency
+Responsibilities:
+  - Reading PROJECT_ROOT, STORAGE_ROOT, DATA_ROOT, GEN_ROOT and TRAIN_ROOT
+  - Providing stable repo-relative and storage-relative paths
+  - Resolving dataset names to dataset directories
+  - Resolving run output directories
+  - Ensuring Docker, notebook and cluster execution consistency
 
 Environment variables (set by Docker or host):
 - PROJECT_ROOT: repository root inside Docker
@@ -15,7 +18,9 @@ Environment variables (set by Docker or host):
 - GEN_ROOT: data-generation storage root
 - TRAIN_ROOT: model-training storage root
 
-TODO: Full implementation in Phase 1 continuation
+This module provides fallback logic: if environment variables are not set,
+paths are resolved relative to this file's location or the project root.
+===============================================================================
 """
 
 import os
@@ -28,7 +33,7 @@ def get_project_root() -> Path:
     if root:
         return Path(root)
     # Fallback: navigate up from this file
-    return Path(__file__).parent.parent.parent.parent.parent
+    return Path(__file__).parent.parent.parent.parent
 
 
 def get_storage_root() -> Path:

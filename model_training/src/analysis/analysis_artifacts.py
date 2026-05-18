@@ -1,4 +1,7 @@
 """
+===============================================================================
+analysis_artifacts.py
+===============================================================================
 Create persistent evaluation artifacts for PINO and FNO models.
 
 This module runs deterministic inference on simulation datasets and stores
@@ -71,8 +74,7 @@ import pandas as pd
 import torch
 from training.tools.pino_brinkman_losses import PINOSpectralLossDiv
 
-from src.schema.schema_kappa import INTERNAL_KAPPA_2D_ORDER, INTERNAL_KAPPA_3D_ORDER
-from src.schema.schema_training import DEFAULT_INPUTS_2D
+from src import domain
 
 if TYPE_CHECKING:
     from torch.utils.data import DataLoader
@@ -82,7 +84,7 @@ if TYPE_CHECKING:
 # Global constants
 # ============================================================================
 
-INTERNAL_KAPPA_NAMES = set(INTERNAL_KAPPA_2D_ORDER) | set(INTERNAL_KAPPA_3D_ORDER)
+INTERNAL_KAPPA_NAMES = set(domain.permeability.INTERNAL_KAPPA_2D_ORDER) | set(domain.permeability.INTERNAL_KAPPA_3D_ORDER)
 MU_AIR = 1.8139e-5  # must be consistent with training
 
 # ----------------------------------------------------------------------------
@@ -334,7 +336,7 @@ def generate_artifacts(  # noqa: PLR0915
     rows: list[dict[str, Any]] = []
 
     # Detect available kappa channels from schema
-    kappa_names = detect_kappa_channels_from_inputs(DEFAULT_INPUTS_2D)
+    kappa_names = detect_kappa_channels_from_inputs(domain.field_sets.DEFAULT_INPUTS_2D)
 
     for idx, batch in enumerate(loader):
         if max_cases is not None and idx >= max_cases:
@@ -348,13 +350,13 @@ def generate_artifacts(  # noqa: PLR0915
         meta_clean = meta_to_jsonable(batch.get("meta", {}))
 
         # Pressure boundary condition (stored for diagnostics)
-        p_bc_idx = DEFAULT_INPUTS_2D.index("p_bc")
+        p_bc_idx = domain.field_sets.DEFAULT_INPUTS_2D.index("p_bc")
         p_bc = x[:, p_bc_idx : p_bc_idx + 1].detach().cpu()
 
         # Permeability fields (no scalar stats here)
         kappa_info = extract_kappa(
             x,
-            input_fields=DEFAULT_INPUTS_2D,
+            input_fields=domain.field_sets.DEFAULT_INPUTS_2D,
             kappa_names=kappa_names,
         )
 
@@ -428,8 +430,8 @@ def generate_artifacts(  # noqa: PLR0915
         err_main = y_hat_main - y_main
 
         # Grid spacing from coordinate fields (physical)
-        idx_x = DEFAULT_INPUTS_2D.index("x")
-        idx_y = DEFAULT_INPUTS_2D.index("y")
+        idx_x = domain.field_sets.DEFAULT_INPUTS_2D.index("x")
+        idx_y = domain.field_sets.DEFAULT_INPUTS_2D.index("y")
         dx = float((x[0, idx_x, 0, 1] - x[0, idx_x, 0, 0]).abs().detach().cpu().item())
         dy = float((x[0, idx_y, 1, 0] - x[0, idx_y, 0, 0]).abs().detach().cpu().item())
 
@@ -509,7 +511,7 @@ def generate_artifacts(  # noqa: PLR0915
             meta=json.dumps(meta_clean),
             x_raw=x_raw,
             y_raw=y_raw,
-            input_fields=np.array(DEFAULT_INPUTS_2D, dtype=object),
+            input_fields=np.array(domain.field_sets.DEFAULT_INPUTS_2D, dtype=object),
             Rx=Rx_np,
             Ry=Ry_np,
             Rc=Rc_np,

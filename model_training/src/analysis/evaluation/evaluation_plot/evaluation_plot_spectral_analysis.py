@@ -27,8 +27,7 @@ import pandas as pd
 import torch
 from matplotlib.lines import Line2D
 
-from src import util
-from src.schema.schema_fields import OUTPUT_FIELDS
+from src import domain, util
 
 if TYPE_CHECKING:
     from matplotlib.figure import Figure
@@ -38,7 +37,7 @@ if TYPE_CHECKING:
 # CONSTANTS
 # =============================================================================
 
-CHANNELS = list(OUTPUT_FIELDS)
+CHANNELS = list(domain.fields.OUTPUT_FIELDS)
 CHANNEL_INDICES = {name: i for i, name in enumerate(CHANNELS)}
 
 EPS = 1e-12

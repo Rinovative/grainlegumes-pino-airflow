@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 from IPython.display import Markdown, display
 
-from src.schema.schema_fields import OUTPUT_FIELDS
+from src import domain
 
 if TYPE_CHECKING:
     from matplotlib.figure import Figure
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 # =============================================================================
 # Channels
 # =============================================================================
-CHANNELS = list(OUTPUT_FIELDS)
+CHANNELS = list(domain.fields.OUTPUT_FIELDS)
 CHANNEL_INDICES = {name: i for i, name in enumerate(CHANNELS)}
 
 # =============================================================================

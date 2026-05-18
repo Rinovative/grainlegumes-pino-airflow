@@ -1,22 +1,17 @@
 """
 ===============================================================================
- schema_fields.
+ domain_fields.py
 ===============================================================================
-Author:  Rino M. Albertin
-Project: GrainLegumes_PINO_project
-
-DESCRIPTION
------------
 Single source of truth for non-kappa input and output field definitions.
 
 Defines:
   - coordinate input fields (x, y)
   - scalar volume input fields with explicit COMSOL column mapping
   - output field mapping from internal names to COMSOL variables
-  - canonical, deterministicD deterministic input channel ordering logic
+  - canonical deterministic input channel ordering logic
 
 Design principles:
-  - kappa (permeability tensor) is handled elsewhere (kappa_schema)
+  - kappa (permeability tensor) is handled in domain_permeability.py
   - this module is strictly declarative (names, order, mapping)
   - no torch / numpy / numerical logic allowed
   - deterministic channel ordering is enforced centrally
@@ -29,7 +24,7 @@ This module does NOT decide:
   - how fields are loaded or interpolated
   - how tensors are stacked or consumed
 ===============================================================================
-"""  # noqa: D205
+"""
 
 from __future__ import annotations
 
